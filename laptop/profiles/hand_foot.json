@@ -1,0 +1,23 @@
+{
+  "name": "right hand (3 fingers) + left foot",
+  "effectors": [
+    {
+      "id": "L_FOOT",
+      "zones": 4
+    },
+    {
+      "id": "R_HAND",
+      "fingers": [
+        "index",
+        "middle",
+        "ring"
+      ]
+    }
+  ],
+  "mode": "FREE",
+  "sensitivity": 1.0,
+  "zone_width": 0.1,
+  "sustain": false,
+  "tap_len": 0.25,
+  "chords": "L_FOOT"
+}

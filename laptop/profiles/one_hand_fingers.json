@@ -1,0 +1,20 @@
+{
+  "name": "right hand, all fingers",
+  "effectors": [
+    {
+      "id": "R_HAND",
+      "fingers": [
+        "thumb",
+        "index",
+        "middle",
+        "ring",
+        "pinky"
+      ]
+    }
+  ],
+  "mode": "FREE",
+  "sensitivity": 1.0,
+  "zone_width": 0.1,
+  "sustain": false,
+  "tap_len": 0.25
+}

@@ -1,419 +1,204 @@
 """
 foot_piano.py - runs on the laptop.
 
-Watches your FEET with the webcam (MediaPipe Pose) and presses real piano keys
-through the Pico + servos. No extra hardware: same Pico, PCA9685 and SG90s.
+Watches the player with a webcam (RTMPose pose model) and presses real piano keys through the Pico +
+servos. Which body parts play is chosen by a PROFILE (feet, one hand + one foot, specific fingers, ...);
+the key layout, calibration and even the model adapt to it.
 
-How you play:
-  - Camera sits on the floor (or a low tripod) 1-1.5 m in front of you, looking at your feet.
-  - The screen is split into 8 zones: C D E F G A B C.
-  - Lift a foot, move it over a zone, put it down -> that key presses and holds.
-  - Lift the foot -> key releases.
-  - Both feet work at the same time (two-note chords, melody + bass, etc).
+How you play
+  - Camera 1-1.5 m away, raised and angled down so it sees the feet (and hands, if the profile uses them).
+  - Hold still for ~1 s when the app starts: it calibrates itself (feet flat, hands open).
+  - Each foot owns a lane of zones around where it rested. Tap a toe (or step) in a zone -> that note.
+  - A finger owns one key. Bend the finger -> that note.
+  - A tap plays a fixed-length note by default; set "sustain": true in the profile to hold while held.
 
-Modes (press M to switch):
-  FREE    each zone plays its own note
-  GUIDED  ANY foot-down plays the next note of the song, with your timing.
-          One foot, one movement, a whole song.
-  CHORD   each zone plays a 3-note chord built on that note
+Modes (MODE button / M)
+  FREE    each slot plays its own note (layout adapts: 8 slots -> 8 keys, 4 -> C E G C, 3 -> C E G ...)
+  GUIDED  ANY slot plays the next note of the song, with your timing
+  CHORD   each slot plays a 3-note chord (I, V, IV, vi first)
+  SPLIT   one effector (default: first foot) plays chords, the others play the melody
 
-Keys:
-  C  calibrate the floor (stand/sit with both feet flat for ~1 second)
-  M  next mode            N  next song           R  release everything
-  H  switch feet <-> hands (hands = original fist mode, as a backup)
-  Q / Esc quit
+Hands-free: hold any tracked body part over a button in the top strip for ~1.2 s.
+Keyboard (for a helper): C recalibrate  M mode  N song  P next preset  R release all  Q/Esc quit
 
-Run:
-  pip install opencv-python mediapipe==0.10.9 numpy pyserial
-  python foot_piano.py --port COM7          (Windows)
-  python foot_piano.py --port /dev/cu.usbmodem1101   (Mac)
-  python foot_piano.py --no-pico            (test without hardware)
+Run (see requirements.txt):
+  python foot_piano.py --port COM7 --profile two_feet
+  python foot_piano.py --port COM7 --profile my_profile.json      (a frontend can rewrite this file live)
+  python foot_piano.py --no-pico                                    (no hardware: prints commands)
+  python foot_piano.py --list-presets
 """
 
 import argparse
+import json
+import os
+import sys
 import time
 
-NUM_KEYS = 8
-NOTE_NAMES = ["C", "D", "E", "F", "G", "A", "B", "C"]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Songs use key index: 0=C 1=D 2=E 3=F 4=G 5=A 6=B 7=high C
-SONGS = [
-    ("Ode to Joy", [2, 2, 3, 4, 4, 3, 2, 1, 0, 0, 1, 2, 2, 1, 1,
-                    2, 2, 3, 4, 4, 3, 2, 1, 0, 0, 1, 2, 1, 0, 0]),
-    ("Mary Had a Little Lamb", [2, 1, 0, 1, 2, 2, 2, 1, 1, 1, 2, 4, 4,
-                                2, 1, 0, 1, 2, 2, 2, 2, 1, 1, 2, 1, 0]),
-    ("Twinkle Twinkle", [0, 0, 4, 4, 5, 5, 4, 3, 3, 2, 2, 1, 1, 0,
-                         4, 4, 3, 3, 2, 2, 1, 4, 4, 3, 3, 2, 2, 1,
-                         0, 0, 4, 4, 5, 5, 4, 3, 3, 2, 2, 1, 1, 0]),
-]
-
-MODES = ["FREE", "GUIDED", "CHORD"]
-
-# ---- foot detection tuning (fractions of frame height) ----
-LIFT_THRESH = 0.045   # foot this far above its floor line = "lifted"
-LAND_THRESH = 0.020   # back within this of the floor line = "down"
-MIN_VIS = 0.5         # MediaPipe visibility below this = foot not seen
-MAX_NOTE_S = 3.0      # auto-release a held note after this long (0 = never)
-CAL_FRAMES = 25       # frames used to learn where the floor is
+from pianolib.pose import extract_observations                        # noqa: E402
+from pianolib.player import PianoLink, Player                         # noqa: E402
+from pianolib.profile import (PRESET_ORDER, PRESETS, ProfileFile,    # noqa: E402
+                              load_profile)
+from pianolib.rig import Rig                                          # noqa: E402
+from pianolib.ui import MENU_H, DwellMenu                             # noqa: E402
 
 
-# --------------------------------------------------------------------------
-# Talking to the Pico
-# --------------------------------------------------------------------------
-class PianoLink:
-    """Sends P/R/A commands. Counts holders per key so overlapping chords work."""
+class App:
+    """Everything except the camera window, so it can be driven by a test."""
 
-    def __init__(self, port=None, baud=115200):
-        self.ser = None
-        self.holders = [0] * NUM_KEYS
-        if port:
-            import serial
-            self.ser = serial.Serial(port, baud, timeout=0)
-            time.sleep(1.5)            # Pico resets/boots when the port opens
-            self.ser.reset_input_buffer()
-        self.log = []                  # recent commands, shown on screen
-
-    def _send(self, msg):
-        self.log = (self.log + [msg])[-6:]
-        if self.ser:
-            self.ser.write((msg + "\n").encode())
-        else:
-            print("[pico]", msg)
-
-    def press(self, k):
-        if not 0 <= k < NUM_KEYS:
-            return
-        self.holders[k] += 1
-        if self.holders[k] == 1:
-            self._send(f"P{k}")
-
-    def release(self, k):
-        if not 0 <= k < NUM_KEYS or self.holders[k] == 0:
-            return
-        self.holders[k] -= 1
-        if self.holders[k] == 0:
-            self._send(f"R{k}")
-
-    def release_all(self):
-        self.holders = [0] * NUM_KEYS
-        self._send("A")
-
-    def held(self, k):
-        return self.holders[k] > 0
-
-    def close(self):
-        self.release_all()
-        if self.ser:
-            self.ser.close()
-
-
-# --------------------------------------------------------------------------
-# Modes: turn "a foot came down in zone Z" into keys to press
-# --------------------------------------------------------------------------
-class Player:
-    def __init__(self, link):
+    def __init__(self, profile, link, backend_factory, aspect=16 / 9.0):
         self.link = link
-        self.mode = 0
-        self.song = 0
-        self.pos = 0
-        self.active = {}               # source id -> list of keys it holds
+        self.backend_factory = backend_factory
+        self.backend = None
+        self.menu = DwellMenu()
+        self.preset_i = 0
+        self.player = Player(link, profile)
+        self.aspect = aspect
+        self.set_profile(profile)
 
-    def keys_for(self, zone):
-        m = MODES[self.mode]
-        if m == "FREE":
-            return [zone]
-        if m == "GUIDED":
-            notes = SONGS[self.song][1]
-            k = notes[self.pos]
-            self.pos = (self.pos + 1) % len(notes)
-            return [k]
-        # CHORD: triad on the scale degree (stays inside the one octave)
-        d = zone % 7
-        root = 7 if zone == 7 else d
-        return [root, (d + 2) % 7, (d + 4) % 7]
+    def set_profile(self, profile):
+        # Build the (possibly new) model first: if loading it fails, the old profile keeps working.
+        backend = self.backend
+        if backend is None or backend.need_hands != profile.needs_hands:
+            backend = self.backend_factory(profile.needs_hands)        # hands need the whole-body model
+        self.backend = backend
+        self.profile = profile
+        self.player.set_profile(profile)
+        self.rig = Rig(profile, self.aspect)
+        if getattr(self.backend, "refiner", None) is not None:
+            self.backend.refiner.reset()
+        print("[profile] %s -> %s model" % (profile.name, self.backend.layout))
 
-    def start(self, src, zone):
-        self.stop(src)
-        keys = self.keys_for(zone)
-        self.active[src] = keys
-        for k in keys:
-            self.link.press(k)
+    def process(self, frame, tcap):
+        """One frame in -> note events out (already forwarded to the player)."""
+        H, W = frame.shape[:2]
+        self.aspect = self.rig.aspect = W / float(H)
+        kpts, scores = self.backend.infer(frame)
+        ref = getattr(self.backend, "refiner", None)
+        refine = (lambda k, s: ref.refine(frame, k, s, tcap)) if ref is not None else None
+        obs = extract_observations(kpts, scores, self.backend.layout, W, H, self.profile,
+                                   self.rig.last_x(), self.rig.calibrating, refine=refine)
+        events = self.rig.update(tcap, obs, menu_y=MENU_H)
+        for eid, slot, kind in events:
+            self.player.on_event(eid, slot, kind, tcap)
+        self.player.tick(time.monotonic())
+        return events
 
-    def stop(self, src):
-        for k in self.active.pop(src, []):
-            self.link.release(k)
+    def pointers_px(self, H):
+        return [(p[0] * H, p[1] * H) for p in self.rig.pointers()]
 
-    def stop_all(self):
-        self.active.clear()
-        self.link.release_all()
-
-    def next_mode(self):
-        self.stop_all()
-        self.mode = (self.mode + 1) % len(MODES)
-        self.pos = 0
-
-    def next_song(self):
-        self.stop_all()
-        self.song = (self.song + 1) % len(SONGS)
-        self.pos = 0
-
-    def next_note_name(self):
-        if MODES[self.mode] != "GUIDED":
-            return None
-        return NOTE_NAMES[SONGS[self.song][1][self.pos]]
-
-    def progress(self):
-        notes = SONGS[self.song][1]
-        return self.pos, len(notes)
-
-
-def zone_of(x):
-    return max(0, min(NUM_KEYS - 1, int(x * NUM_KEYS)))
-
-
-# --------------------------------------------------------------------------
-# Foot logic (no camera code here, so it can be tested with fake numbers)
-# --------------------------------------------------------------------------
-class FootState:
-    def __init__(self, name):
-        self.name = name
-        self.floor_y = None            # learned floor line (normalized y)
-        self.cal = []
-        self.down = True               # assume planted until we see a lift
-        self.armed = False             # only play after a real lift (no ghost notes)
-        self.note_since = None
-        self.x = self.y = None
-        self.visible = False
+    def press_button(self, name):
+        if name == "MODE":
+            self.player.next_mode()
+        elif name == "SONG":
+            self.player.next_song()
+        elif name == "RECAL":
+            self.player.stop_all()
+            self.rig.recalibrate()
+        elif name == "STOP":
+            self.player.stop_all()
+        elif name == "PROFILE":
+            nxt = (self.preset_i + 1) % len(PRESET_ORDER)
+            try:
+                self.set_profile(PRESETS[PRESET_ORDER[nxt]])
+                self.preset_i = nxt
+            except Exception as e:                    # e.g. the hand model could not be loaded
+                print("[profile] could not switch:", e)
 
 
-class FootTracker:
-    """
-    A note fires when a foot goes LIFTED -> DOWN. It holds while the foot stays down
-    and releases when the foot lifts again (or after MAX_NOTE_S).
-    """
-
-    def __init__(self, player):
-        self.player = player
-        self.feet = {"L": FootState("L"), "R": FootState("R")}
-        self.calibrating = False
-
-    def start_calibration(self):
-        self.player.stop_all()
-        self.calibrating = True
-        for f in self.feet.values():
-            f.cal = []
-            f.floor_y = None
-            f.down, f.armed, f.note_since = True, False, None
-
-    def calibrated(self):
-        return all(f.floor_y is not None for f in self.feet.values())
-
-    def update(self, name, x, y, vis, now=None):
-        now = time.time() if now is None else now
-        f = self.feet[name]
-        f.visible = vis >= MIN_VIS
-        if not f.visible:
-            if f.note_since is not None:
-                self.player.stop(name)
-                f.note_since = None
-            return
-        f.x, f.y = x, y
-
-        if self.calibrating:
-            f.cal.append(y)
-            if len(f.cal) >= CAL_FRAMES:
-                f.floor_y = sorted(f.cal)[len(f.cal) // 2]
-            if self.calibrated():
-                self.calibrating = False
-            return
-        if f.floor_y is None:
-            return
-
-        height = f.floor_y - y          # positive = foot is above the floor line
-        if f.down and height > LIFT_THRESH:
-            f.down = False
-            f.armed = True
-            if f.note_since is not None:
-                self.player.stop(name)
-                f.note_since = None
-        elif not f.down and height < LAND_THRESH:
-            f.down = True
-            if f.armed:
-                self.player.start(name, zone_of(x))
-                f.note_since = now
-                f.armed = False
-
-        if f.note_since is not None and MAX_NOTE_S and now - f.note_since > MAX_NOTE_S:
-            self.player.stop(name)
-            f.note_since = None
-
-
-# --------------------------------------------------------------------------
-# Hands (backup mode, same idea as the original air_piano.py: fist = press)
-# --------------------------------------------------------------------------
-def is_fist(lm):
-    # fingertip below its middle knuckle (in image y) = curled
-    return all(lm[tip].y > lm[pip].y for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)))
-
-
-class HandTracker:
-    def __init__(self, player):
-        self.player = player
-        self.state = {}                # hand id -> (pressed, zone)
-
-    def update(self, hand_id, x, fist):
-        pressed, zone = self.state.get(hand_id, (False, None))
-        if fist and not pressed:
-            z = zone_of(x)
-            self.player.start(hand_id, z)
-            self.state[hand_id] = (True, z)
-        elif not fist and pressed:
-            self.player.stop(hand_id)
-            self.state[hand_id] = (False, None)
-
-    def lost(self, hand_id):
-        if self.state.get(hand_id, (False,))[0]:
-            self.player.stop(hand_id)
-        self.state.pop(hand_id, None)
-
-
-# --------------------------------------------------------------------------
-# Drawing
-# --------------------------------------------------------------------------
-def draw(frame, cv2, player, link, feet, input_mode, fps):
-    h, w = frame.shape[:2]
-    zw = w / NUM_KEYS
-    overlay = frame.copy()
-    for k in range(NUM_KEYS):
-        x0, x1 = int(k * zw), int((k + 1) * zw)
-        held = link.held(k)
-        color = (60, 200, 90) if held else ((70, 70, 70) if k % 2 else (100, 100, 100))
-        cv2.rectangle(overlay, (x0, int(h * 0.80)), (x1, h), color, -1)
-        cv2.line(frame, (x0, 0), (x0, h), (200, 200, 200), 1)
-    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
-    for k in range(NUM_KEYS):
-        cx = int((k + 0.5) * zw)
-        cv2.putText(frame, NOTE_NAMES[k], (cx - 12, h - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-
-    if input_mode == "feet":
-        for f in feet.feet.values():
-            if f.floor_y is not None:
-                y_floor = int(f.floor_y * h)
-                y_lift = int((f.floor_y - LIFT_THRESH) * h)
-                cv2.line(frame, (0, y_floor), (w, y_floor), (0, 180, 255), 1)
-                cv2.line(frame, (0, y_lift), (w, y_lift), (0, 90, 255), 1)
-            if f.visible and f.x is not None:
-                c = (60, 220, 90) if f.note_since else ((0, 200, 255) if not f.down else (255, 255, 255))
-                p = (int(f.x * w), int(f.y * h))
-                cv2.circle(frame, p, 14, c, -1)
-                cv2.putText(frame, f.name, (p[0] - 7, p[1] + 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-
-    lines = [f"Mode: {MODES[player.mode]}   Input: {input_mode.upper()}   {fps:4.1f} fps"]
-    if MODES[player.mode] == "GUIDED":
-        i, n = player.progress()
-        lines.append(f"Song: {SONGS[player.song][0]}  ({i}/{n})   Next: {player.next_note_name()}")
-    if input_mode == "feet" and feet.calibrating:
-        lines.append("CALIBRATING - keep both feet flat...")
-    elif input_mode == "feet" and not feet.calibrated():
-        lines.append("Press C with both feet flat on the floor to calibrate")
-    lines.append("C calibrate  M mode  N song  R release  H feet/hands  Q quit")
-    for i, t in enumerate(lines):
-        cv2.putText(frame, t, (12, 30 + 28 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-        cv2.putText(frame, t, (12, 30 + 28 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-
-# --------------------------------------------------------------------------
-# Main loop
-# --------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="Pico serial port, e.g. COM7 or /dev/cu.usbmodem1101")
     ap.add_argument("--no-pico", action="store_true", help="run without hardware")
     ap.add_argument("--camera", type=int, default=0)
-    ap.add_argument("--hands", action="store_true", help="start in hands mode")
+    ap.add_argument("--width", type=int, default=1280)
+    ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--profile", default="two_feet", help="preset name or path to a profile JSON")
+    ap.add_argument("--model-mode", default="balanced", choices=["lightweight", "balanced", "performance"],
+                    help="rtmlib model size: lightweight is fastest, performance most accurate")
+    ap.add_argument("--device", default="cpu", help="cpu or cuda")
+    ap.add_argument("--no-hand-refine", action="store_true",
+                    help="skip the hand-only crop model (faster, but fingers are less reliable)")
+    ap.add_argument("--list-presets", action="store_true")
+    ap.add_argument("--dump-presets", metavar="DIR", help="write every preset to DIR/*.json and exit")
     args = ap.parse_args()
 
+    if args.list_presets:
+        for k in PRESET_ORDER:
+            print("%-18s %s" % (k, PRESETS[k].name))
+        return
+    if args.dump_presets:
+        os.makedirs(args.dump_presets, exist_ok=True)
+        for k in PRESET_ORDER:
+            with open(os.path.join(args.dump_presets, k + ".json"), "w", encoding="utf-8") as f:
+                json.dump(PRESETS[k].to_dict(), f, indent=2)
+        print("wrote", len(PRESET_ORDER), "presets to", args.dump_presets)
+        return
+
     import cv2
-    import mediapipe as mp
+    from pianolib.pose import LatestFrameCamera, PoseBackend
+    from pianolib.ui import draw
 
+    profile = load_profile(args.profile)
+    watcher = ProfileFile(args.profile if os.path.exists(args.profile) else None)
     link = PianoLink(None if args.no_pico else args.port)
-    player = Player(link)
-    feet = FootTracker(player)
-    hands_tr = HandTracker(player)
-    input_mode = "hands" if args.hands else "feet"
 
-    pose = mp.solutions.pose.Pose(model_complexity=0, smooth_landmarks=True,
-                                  min_detection_confidence=0.5, min_tracking_confidence=0.5)
-    hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0,
-                                     min_detection_confidence=0.6, min_tracking_confidence=0.5)
-    P = mp.solutions.pose.PoseLandmark
+    def make_backend(need_hands):
+        print("[model] loading RTMPose (%s) - the first run downloads the weights..." % args.model_mode)
+        return PoseBackend(need_hands, mode=args.model_mode, device=args.device,
+                           refine_hands=not args.no_hand_refine)
 
-    cap = cv2.VideoCapture(args.camera)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    app = App(profile, link, make_backend, args.width / float(args.height))
+    cam = LatestFrameCamera(args.camera, args.width, args.height)
 
-    if input_mode == "feet":
-        feet.start_calibration()
-
-    last, fps = time.time(), 0.0
+    last, fps, lat_ms = time.monotonic(), 0.0, 0.0
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
+            frame, tcap = cam.read(timeout=2.0)
+            if frame is None:
+                print("[camera] no frames - check --camera")
                 break
-            frame = cv2.flip(frame, 1)         # mirror so left/right match the player
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            if input_mode == "feet":
-                res = pose.process(rgb)
-                if res.pose_landmarks:
-                    lm = res.pose_landmarks.landmark
-                    # after mirroring, the person's left foot shows on screen-left
-                    for name, idx in (("L", P.RIGHT_FOOT_INDEX), ("R", P.LEFT_FOOT_INDEX)):
-                        p = lm[idx]
-                        feet.update(name, p.x, p.y, p.visibility)
-                else:
-                    for name in ("L", "R"):
-                        feet.update(name, 0, 0, 0.0)
-            else:
-                res = hands.process(rgb)
-                seen = set()
-                if res.multi_hand_landmarks:
-                    for i, hl in enumerate(res.multi_hand_landmarks):
-                        hid = f"hand{i}"
-                        seen.add(hid)
-                        hands_tr.update(hid, hl.landmark[9].x, is_fist(hl.landmark))
-                for hid in list(hands_tr.state):
-                    if hid not in seen:
-                        hands_tr.lost(hid)
+            newp = watcher.poll()
+            if newp is not None:
+                try:
+                    app.player.stop_all()
+                    app.set_profile(newp)
+                except Exception as e:                # e.g. the new model could not be loaded
+                    print("[profile] could not switch, keeping the current one:", e)
 
-            now = time.time()
+            app.process(frame, tcap)
+            H, W = frame.shape[:2]
+            btn = app.menu.update(time.monotonic(), app.pointers_px(H), W, H)
+            if btn:
+                app.press_button(btn)
+
+            now = time.monotonic()
+            lat_ms = 0.9 * lat_ms + 0.1 * (now - tcap) * 1000.0
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - last, 1e-3))
             last = now
-            draw(frame, cv2, player, link, feet, input_mode, fps)
-            cv2.imshow("Foot Piano", frame)
+
+            disp = cv2.flip(frame, 1)                 # mirror: your left is on screen-left
+            draw(disp, cv2, app.rig, app.player, link, app.menu, fps, lat_ms)
+            cv2.imshow("Foot Piano", disp)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 break
             elif key == ord("c"):
-                feet.start_calibration()
+                app.press_button("RECAL")
             elif key == ord("m"):
-                player.next_mode()
+                app.press_button("MODE")
             elif key == ord("n"):
-                player.next_song()
+                app.press_button("SONG")
+            elif key == ord("p"):
+                app.press_button("PROFILE")
             elif key == ord("r"):
-                player.stop_all()
-            elif key == ord("h"):
-                player.stop_all()
-                input_mode = "hands" if input_mode == "feet" else "feet"
-                if input_mode == "feet":
-                    feet.start_calibration()
+                app.press_button("STOP")
     finally:
         link.close()
-        cap.release()
+        cam.release()
         cv2.destroyAllWindows()
 
 

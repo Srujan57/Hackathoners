@@ -1,0 +1,9 @@
+# Laptop side. Python 3.9+.
+numpy
+opencv-python
+pyserial
+rtmlib==0.0.16          # RTMPose / RTMW wrappers (no mmcv/mmpose needed). Pinned: the code was written against
+                        # this version's source; it has NOT been run against the real models yet.
+onnxruntime             # CPU. For an NVIDIA GPU use onnxruntime-gpu instead and pass --device cuda
+# tests only:
+pytest
