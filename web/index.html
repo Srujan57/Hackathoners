@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Air Piano</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e9ecf2;--panel:#fff;--ink:#16182c;--mute:#5d6280;--line:#d3d7e3;--blue:#3355ff;--sun:#ffb524;--ok:#1a9a68;--bad:#d6423a;--key:#fbfbfd;--r:14px;
+--f1:"Bricolage Grotesque",system-ui,sans-serif;--f2:"DM Sans",system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#171a2b;--panel:#21253c;--ink:#eef0fa;--mute:#9ba1c4;--line:#343a5c;--key:#e9ebf6;--blue:#7a93ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--f2)}
+header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding:20px clamp(16px,4vw,40px)}
+h1{font:800 clamp(28px,4vw,40px)/1 var(--f1);margin:0;letter-spacing:-.02em}
+h2{font:600 17px var(--f1);margin:0 0 12px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid var(--line);border-radius:99px;background:var(--panel);font-weight:500}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mute)}
+.chip.on .dot{background:var(--ok)}
+main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:20px;padding:0 clamp(16px,4vw,40px) 40px;max-width:1400px;margin:auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.stage{position:relative;border-radius:var(--r);overflow:hidden;background:#0f1124;aspect-ratio:4/3}
+.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.mirror video{transform:scaleX(-1)}
+.stage .cta{position:absolute;inset:0;display:grid;place-content:center;gap:12px;text-align:center;color:#fff;padding:20px}
+.stage .cta p{margin:0;max-width:34ch;opacity:.85}
+.keys{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-top:14px;height:170px}
+.key{border:1px solid var(--line);border-radius:0 0 10px 10px;background:var(--key);color:#16182c;font:700 20px var(--f1);display:flex;align-items:flex-end;justify-content:center;padding:0 0 12px;cursor:pointer;transition:transform .06s,background .06s;position:relative}
+.key small{position:absolute;top:8px;font:500 12px var(--f2);color:#6a6f8c}
+.key.on{background:var(--sun);transform:translateY(5px);border-color:var(--sun)}
+button,select,input{font:inherit;color:inherit}
+button{border:0;border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer;background:var(--blue);color:#fff}
+button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,.key:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+.side{display:grid;gap:20px;align-content:start}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+label{display:grid;gap:4px;margin-bottom:12px;font-weight:500}
+label span{display:flex;justify-content:space-between;color:var(--mute);font-weight:400}
+input[type=range]{width:100%;accent-color:var(--blue)}
+input[type=text],select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.check{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+details summary{cursor:pointer;font:600 17px var(--f1)}
+details[open] summary{margin-bottom:12px}
+.hint{color:var(--mute);font-size:13px;margin:6px 0 0}
+#log{height:120px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--mute);background:var(--bg);border-radius:8px;padding:8px;margin:0;white-space:pre-wrap}
+.setup{max-width:760px;margin:0 auto;padding:8px clamp(16px,4vw,40px) 48px}
+.setup h2{font:800 clamp(24px,3.4vw,34px)/1.1 var(--f1);letter-spacing:-.02em;margin:0 0 8px}
+.setup p{color:var(--mute);margin:0 0 20px;max-width:60ch}
+.limbs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
+.limb{display:flex;align-items:center;gap:14px;text-align:left;padding:18px;border-radius:var(--r);border:2px solid var(--line);background:var(--panel);color:var(--ink);font:600 18px var(--f1)}
+.limb small{display:block;font:400 13px var(--f2);color:var(--mute)}
+.limb i{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-content:center;font-style:normal;font-size:15px;color:#fff}
+.limb[aria-pressed=true]{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 10%,var(--panel))}
+.limb[aria-pressed=true] i{background:var(--blue);border-color:var(--blue)}
+.limb[aria-pressed=true] i::after{content:"✓"}
+.presets{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 28px}
+.presets button{padding:8px 14px;font-weight:500}
+[hidden]{display:none!important}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0f1124}
+.stage .cta{background:#0f1124cc}
+.banner{margin:12px 0 0;padding:10px 14px;border-radius:10px;background:color-mix(in srgb,var(--sun) 25%,var(--panel));border:1px solid var(--sun)}
+.banner.bad{background:color-mix(in srgb,var(--bad) 14%,var(--panel));border-color:var(--bad)}
+.limbcard{border:2px solid var(--line);border-radius:var(--r);background:var(--panel);overflow:hidden}
+.limbcard .limb{border:0;width:100%;border-radius:0;background:transparent}
+.limbcard:has(.limb[aria-pressed=true]){border-color:var(--blue)}
+.sub{padding:0 18px 16px}
+.fing{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.fing button,.seg button{padding:6px 12px;border-radius:99px;font-weight:500;background:transparent;color:var(--ink);border:1px solid var(--line)}
+.fing button[aria-pressed=true],.seg button[aria-pressed=true]{background:var(--blue);color:#fff;border-color:var(--blue)}
+.seg{display:flex;gap:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Air Piano</h1>
+  <div class="chips" aria-live="polite">
+    <button class="alt" id="btnChange" hidden>Change who plays</button>
+    <div class="chip" id="chipTrack"><i class="dot"></i><span>Server offline</span></div>
+    <div class="chip" id="chipPico"><i class="dot"></i><span>Piano not connected</span></div>
+    <div class="chip" id="chipFps"><i class="dot"></i><span>0 fps</span></div>
+  </div>
+</header>
+
+<section class="setup" id="setup" aria-labelledby="setupH">
+  <h2 id="setupH">Who’s playing?</h2>
+  <p>Choose the body parts you want to play with, in any mix. For a hand, play with the whole hand or pick the exact fingers you use. You can change this at any time.</p>
+  <div class="limbs" id="limbBtns"></div>
+  <div class="presets" id="presets" role="group" aria-label="Quick picks"></div>
+  <button id="btnGo" disabled>Start playing</button>
+  <p class="hint" id="goHint">Pick at least one body part.</p>
+</section>
+
+<main hidden id="app">
+  <section>
+    <div class="stage" id="stage">
+      <img id="video" alt="Live camera view with note lanes and tracked body parts">
+      <div class="cta" id="cta"><p id="ctaText">Connecting to the Air Piano server…</p></div>
+    </div>
+    <div class="banner" id="banner" hidden role="status"></div>
+    <div class="keys" id="keys" role="group" aria-label="Piano keys"></div>
+    <p class="hint">Click a key, or press A S D F G H J K, to test the servos without moving.</p>
+  </section>
+
+  <aside class="side">
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="row">
+        <button id="btnRecal">Recalibrate</button>
+        <button class="alt" id="btnStop">Release all keys</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="alt" id="btnMode">Mode</button>
+        <button class="alt" id="btnSong">Song</button>
+      </div>
+      <p class="hint" id="modeHint"></p>
+      <p class="hint">To recalibrate, rest your feet flat or hands open and hold still for about a second.</p>
+    </div>
+
+    <div class="card">
+      <h2>Play settings</h2>
+      <label><span>Sensitivity <b id="vSens"></b></span><input type="range" id="sens" min="0.2" max="5" step="0.1"></label>
+      <label><span>Note length <b id="vLen"></b></span><input type="range" id="len" min="0.05" max="1.5" step="0.05"></label>
+      <label><span>Lane width <b id="vZone"></b></span><input type="range" id="zone" min="0.03" max="0.3" step="0.01"></label>
+      <div class="check"><input type="checkbox" id="sustain"><label for="sustain" style="margin:0">Hold the note while the body part is held</label></div>
+      <div class="check"><input type="checkbox" id="sound"><label for="sound" style="margin:0">Preview sound in browser</label></div>
+      <button id="btnApply" disabled>Apply changes</button>
+      <p class="hint">Applying changes restarts calibration.</p>
+    </div>
+
+    <div class="card"><h2>Activity</h2><pre id="log"></pre></div>
+  </aside>
+</main>
+
+<script type="module">
+const NOTES = ['C','D','E','F','G','A','B','C'];
+const HOTKEYS = ['a','s','d','f','g','h','j','k'];
+const FINGERS = ['thumb','index','middle','ring','pinky'];
+const LIMBS = [
+  {id: 'L_HAND', label: 'Left hand', hand: true}, {id: 'R_HAND', label: 'Right hand', hand: true},
+  {id: 'L_FOOT', label: 'Left foot', sub: 'tracked at the toe'}, {id: 'R_FOOT', label: 'Right foot', sub: 'tracked at the toe'}];
+const $ = id => document.getElementById(id);
+const DEF = {pick: {L_FOOT: null, R_FOOT: null}, cfg: {sensitivity: 1, tap_len: .25, zone_width: .1, sustain: false}, sound: false};
+let S = DEF;
+try { S = {...DEF, ...JSON.parse(localStorage.getItem('airpiano') || '{}')}; } catch {}
+const save = () => { try { localStorage.setItem('airpiano', JSON.stringify(S)); } catch {} };
+const post = async (path, body) => {
+  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+};
+const logEl = $('log');
+const log = m => { logEl.textContent += `${new Date().toLocaleTimeString()}  ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
+const chip = (id, on, text) => { $(id).classList.toggle('on', on); $(id).lastElementChild.textContent = text; };
+
+/* ---------- Who is playing ---------- */
+/* pick[id] = null (foot, or whole hand) or an array of fingers (hand) */
+let pick = {...S.pick}, fingerMode = {};
+LIMBS.filter(l => l.hand).forEach(l => fingerMode[l.id] = Array.isArray(pick[l.id]));
+const PRESETS = [['Both feet', ['L_FOOT','R_FOOT']], ['Both hands', ['L_HAND','R_HAND']],
+  ['Left hand + left foot', ['L_HAND','L_FOOT']], ['Right hand + right foot', ['R_HAND','R_FOOT']],
+  ['Left hand + right foot', ['L_HAND','R_FOOT']], ['Right hand + left foot', ['R_HAND','L_FOOT']],
+  ['All four', ['L_HAND','R_HAND','L_FOOT','R_FOOT']]];
+const mk = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || '', innerHTML: html || ''});
+function renderSetup() {
+  const box = $('limbBtns'); box.innerHTML = '';
+  LIMBS.forEach(l => {
+    const on = l.id in pick, card = mk('div', 'limbcard');
+    const b = mk('button', 'limb', `<i></i><span>${l.label}<small>${l.hand ? 'tracked at the wrist' : l.sub}</small></span>`);
+    b.type = 'button'; b.setAttribute('aria-pressed', on);
+    b.onclick = () => { on ? delete pick[l.id] : pick[l.id] = fingerMode[l.id] ? [...FINGERS] : null; renderSetup(); };
+    card.append(b);
+    if (on && l.hand) {
+      const sub = mk('div', 'sub'), seg = mk('div', 'seg');
+      [['Whole hand', false], ['Choose fingers', true]].forEach(([t, f]) => {
+        const s = mk('button', '', t); s.type = 'button'; s.setAttribute('aria-pressed', fingerMode[l.id] === f);
+        s.onclick = () => { fingerMode[l.id] = f; pick[l.id] = f ? [...FINGERS] : null; renderSetup(); };
+        seg.append(s);
+      });
+      sub.append(seg);
+      if (fingerMode[l.id]) {
+        const fg = mk('div', 'fing');
+        FINGERS.forEach(f => {
+          const c = mk('button', '', f); c.type = 'button'; c.setAttribute('aria-pressed', pick[l.id].includes(f));
+          c.onclick = () => { const a = pick[l.id]; a.includes(f) ? a.splice(a.indexOf(f), 1) : a.push(f); renderSetup(); };
+          fg.append(c);
+        });
+        sub.append(fg);
+      }
+      card.append(sub);
+    }
+    box.append(card);
+  });
+  const ok = Object.keys(pick).length && Object.values(pick).every(v => v === null || v.length);
+  $('btnGo').disabled = !ok;
+  $('goHint').hidden = !!ok;
+  $('goHint').textContent = Object.keys(pick).length ? 'Pick at least one finger for each hand using fingers.' : 'Pick at least one body part.';
+}
+PRESETS.forEach(([name, ids]) => {
+  const b = mk('button', 'alt', name); b.type = 'button';
+  b.onclick = () => { pick = {}; ids.forEach(i => { pick[i] = null; fingerMode[i] = false; }); renderSetup(); };
+  $('presets').append(b);
+});
+function buildProfile() {
+  const ids = LIMBS.map(l => l.id).filter(i => i in pick);
+  const effectors = ids.map(id => id.endsWith('FOOT') ? {id, zones: 4} : pick[id] ? {id, fingers: pick[id]} : {id});
+  const first = ids.find(i => i.endsWith('FOOT'));
+  const name = ids.map(i => LIMBS.find(l => l.id === i).label.toLowerCase()).join(' + ');
+  return {name, effectors, mode: 'FREE', ...(first ? {chords: first} : {}), sensitivity: S.cfg.sensitivity,
+          zone_width: S.cfg.zone_width, sustain: S.cfg.sustain, tap_len: S.cfg.tap_len};
+}
+const showSetup = on => { $('setup').hidden = !on; $('app').hidden = on; $('btnChange').hidden = on; if (on) renderSetup(); };
+$('btnGo').onclick = async () => {
+  S.pick = pick; save();
+  try { await post('/api/profile', buildProfile()); log('Playing with: ' + buildProfile().name + '.'); showSetup(false); }
+  catch (e) { $('goHint').hidden = false; $('goHint').textContent = 'Could not start: ' + e.message + ' Is web_server.py running?'; }
+};
+$('btnChange').onclick = () => showSetup(true);
+showSetup(true);
+
+/* ---------- Piano keys ---------- */
+const keysEl = $('keys');
+NOTES.forEach((n, i) => {
+  const b = mk('button', 'key', `<small>${HOTKEYS[i].toUpperCase()}</small>${n}`);
+  b.type = 'button'; b.setAttribute('aria-label', `Test ${n}, key ${i + 1}`);
+  b.addEventListener('pointerdown', () => post('/api/key', {k: i}).catch(e => log('Key failed: ' + e.message)));
+  keysEl.append(b);
+});
+const keyEls = [...keysEl.children];
+addEventListener('keydown', e => {
+  if (e.repeat || $('app').hidden || /INPUT|SELECT/.test(e.target.tagName)) return;
+  const i = HOTKEYS.indexOf(e.key.toLowerCase()); if (i >= 0) post('/api/key', {k: i}).catch(() => {});
+});
+let actx; const FREQ = [261.63, 293.66, 329.63, 349.23, 392, 440, 493.88, 523.25];
+function beep(i) {
+  actx = actx || new AudioContext();
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.type = 'triangle'; o.frequency.value = FREQ[i];
+  g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.3, t + .01); g.gain.exponentialRampToValueAtTime(.0001, t + .5);
+  o.connect(g).connect(actx.destination); o.start(); o.stop(t + .6);
+}
+
+/* ---------- Controls & settings ---------- */
+const act = name => post('/api/action', {name}).catch(e => log(name + ' failed: ' + e.message));
+$('btnRecal').onclick = () => act('RECAL'); $('btnStop').onclick = () => act('STOP');
+$('btnMode').onclick = () => act('MODE'); $('btnSong').onclick = () => act('SONG');
+const sets = [['sens', 'sensitivity', 'vSens', v => v.toFixed(1) + '×'], ['len', 'tap_len', 'vLen', v => v.toFixed(2) + ' s'],
+              ['zone', 'zone_width', 'vZone', v => Math.round(v * 100) + '% of width']];
+sets.forEach(([id, key, out, f]) => {
+  $(id).value = S.cfg[key]; $(out).textContent = f(S.cfg[key]);
+  $(id).oninput = () => { S.cfg[key] = +$(id).value; $(out).textContent = f(S.cfg[key]); $('btnApply').disabled = false; };
+});
+$('sustain').checked = S.cfg.sustain; $('sustain').oninput = () => { S.cfg.sustain = $('sustain').checked; $('btnApply').disabled = false; };
+$('sound').checked = S.sound; $('sound').oninput = () => { S.sound = $('sound').checked; save(); };
+$('btnApply').onclick = async () => {
+  save();
+  try { await post('/api/profile', buildProfile()); $('btnApply').disabled = true; log('Settings applied. Recalibrating.'); }
+  catch (e) { log('Could not apply: ' + e.message); }
+};
+
+/* ---------- Live state from the server ---------- */
+let prevHeld = [], started = false;
+function banner(text, bad) { const b = $('banner'); b.hidden = !text; b.textContent = text || ''; b.classList.toggle('bad', !!bad); }
+function onState(s) {
+  if (s.starting) { $('ctaText').textContent = 'Loading the pose model. The first run downloads it and can take a minute.'; return; }
+  if (!started && s.profile) { started = true; $('video').src = '/video'; $('cta').hidden = true; }
+  if (s.error && !s.profile) { $('cta').hidden = false; $('ctaText').textContent = s.error; chip('chipTrack', false, 'Tracking stopped'); return; }
+  chip('chipTrack', !s.calibrating, s.calibrating ? 'Calibrating' : 'Tracking');
+  chip('chipPico', s.pico && !s.link_error, !s.pico ? 'No piano (test mode)' : s.link_error ? 'Piano link problem' : 'Piano connected');
+  chip('chipFps', s.fps > 8, `${s.fps} fps`);
+  $('btnMode').textContent = 'Mode: ' + s.mode;
+  $('modeHint').textContent = s.mode === 'GUIDED' ? `Song: ${s.song}. Next note: ${s.next}.` : { FREE: 'Each lane or finger plays its own note.', CHORD: 'Each lane or finger plays a chord.', SPLIT: 'One body part plays chords, the rest play the melody.' }[s.mode] || '';
+  banner(s.error || (s.link_error ? 'Piano link problem: ' + s.link_error : s.calibrating ? s.status : s.warnings?.[0]), !!(s.error || s.link_error));
+  keyEls.forEach((k, i) => k.classList.toggle('on', s.held.includes(i)));
+  s.held.filter(k => !prevHeld.includes(k)).forEach(k => { log(NOTES[k] + ' pressed'); if (S.sound) beep(k); });
+  prevHeld = s.held;
+}
+const es = new EventSource('/events');
+es.onmessage = e => onState(JSON.parse(e.data));
+es.onerror = () => { chip('chipTrack', false, 'Server offline'); $('cta').hidden = false; $('ctaText').textContent = 'Can’t reach the Air Piano server. Start it with: python web_server.py --port <your port>'; started = false; };
+</script>
+</body>
+</html>
