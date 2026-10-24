@@ -3,286 +3,760 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Air Piano</title>
+<title>Open Keys</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#e9ecf2;--panel:#fff;--ink:#16182c;--mute:#5d6280;--line:#d3d7e3;--blue:#3355ff;--sun:#ffb524;--ok:#1a9a68;--bad:#d6423a;--key:#fbfbfd;--r:14px;
---f1:"Bricolage Grotesque",system-ui,sans-serif;--f2:"DM Sans",system-ui,sans-serif}
-@media (prefers-color-scheme:dark){:root{--bg:#171a2b;--panel:#21253c;--ink:#eef0fa;--mute:#9ba1c4;--line:#343a5c;--key:#e9ebf6;--blue:#7a93ff}}
+:root{
+  --bg:#0d1015; --panel:#161a21; --panel2:#1d222b; --line:#2a303b;
+  --text:#f2f4f7; --dim:#a3abb8; --faint:#6d7685;
+  --amber:#ffb547; --amber-dim:#5a4520; --green:#4ade80; --red:#ff5a5f; --blue:#7cb8ff;
+  --r:14px;
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--f2)}
-header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding:20px clamp(16px,4vw,40px)}
-h1{font:800 clamp(28px,4vw,40px)/1 var(--f1);margin:0;letter-spacing:-.02em}
-h2{font:600 17px var(--f1);margin:0 0 12px}
-.chips{display:flex;gap:8px;flex-wrap:wrap}
-.chip{display:flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid var(--line);border-radius:99px;background:var(--panel);font-weight:500}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--mute)}
-.chip.on .dot{background:var(--ok)}
-main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:20px;padding:0 clamp(16px,4vw,40px) 40px;max-width:1400px;margin:auto}
-@media(max-width:900px){main{grid-template-columns:1fr}}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px}
-.stage{position:relative;border-radius:var(--r);overflow:hidden;background:#0f1124;aspect-ratio:4/3}
-.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.mirror video{transform:scaleX(-1)}
-.stage .cta{position:absolute;inset:0;display:grid;place-content:center;gap:12px;text-align:center;color:#fff;padding:20px}
-.stage .cta p{margin:0;max-width:34ch;opacity:.85}
-.keys{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-top:14px;height:170px}
-.key{border:1px solid var(--line);border-radius:0 0 10px 10px;background:var(--key);color:#16182c;font:700 20px var(--f1);display:flex;align-items:flex-end;justify-content:center;padding:0 0 12px;cursor:pointer;transition:transform .06s,background .06s;position:relative}
-.key small{position:absolute;top:8px;font:500 12px var(--f2);color:#6a6f8c}
-.key.on{background:var(--sun);transform:translateY(5px);border-color:var(--sun)}
-button,select,input{font:inherit;color:inherit}
-button{border:0;border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer;background:var(--blue);color:#fff}
-button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
-button:focus-visible,.key:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
-button:disabled{opacity:.5;cursor:default}
-.side{display:grid;gap:20px;align-content:start}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-label{display:grid;gap:4px;margin-bottom:12px;font-weight:500}
-label span{display:flex;justify-content:space-between;color:var(--mute);font-weight:400}
-input[type=range]{width:100%;accent-color:var(--blue)}
-input[type=text],select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
-.check{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-details summary{cursor:pointer;font:600 17px var(--f1)}
-details[open] summary{margin-bottom:12px}
-.hint{color:var(--mute);font-size:13px;margin:6px 0 0}
-#log{height:120px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--mute);background:var(--bg);border-radius:8px;padding:8px;margin:0;white-space:pre-wrap}
-.setup{max-width:760px;margin:0 auto;padding:8px clamp(16px,4vw,40px) 48px}
-.setup h2{font:800 clamp(24px,3.4vw,34px)/1.1 var(--f1);letter-spacing:-.02em;margin:0 0 8px}
-.setup p{color:var(--mute);margin:0 0 20px;max-width:60ch}
-.limbs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
-.limb{display:flex;align-items:center;gap:14px;text-align:left;padding:18px;border-radius:var(--r);border:2px solid var(--line);background:var(--panel);color:var(--ink);font:600 18px var(--f1)}
-.limb small{display:block;font:400 13px var(--f2);color:var(--mute)}
-.limb i{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-content:center;font-style:normal;font-size:15px;color:#fff}
-.limb[aria-pressed=true]{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 10%,var(--panel))}
-.limb[aria-pressed=true] i{background:var(--blue);border-color:var(--blue)}
-.limb[aria-pressed=true] i::after{content:"✓"}
-.presets{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 28px}
-.presets button{padding:8px 14px;font-weight:500}
-[hidden]{display:none!important}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font-family:"Atkinson Hyperlegible",system-ui,-apple-system,Segoe UI,sans-serif;font-size:17px;line-height:1.4}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
-.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0f1124}
-.stage .cta{background:#0f1124cc}
-.banner{margin:12px 0 0;padding:10px 14px;border-radius:10px;background:color-mix(in srgb,var(--sun) 25%,var(--panel));border:1px solid var(--sun)}
-.banner.bad{background:color-mix(in srgb,var(--bad) 14%,var(--panel));border-color:var(--bad)}
-.limbcard{border:2px solid var(--line);border-radius:var(--r);background:var(--panel);overflow:hidden}
-.limbcard .limb{border:0;width:100%;border-radius:0;background:transparent}
-.limbcard:has(.limb[aria-pressed=true]){border-color:var(--blue)}
-.sub{padding:0 18px 16px}
-.fing{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-.fing button,.seg button{padding:6px 12px;border-radius:99px;font-weight:500;background:transparent;color:var(--ink);border:1px solid var(--line)}
-.fing button[aria-pressed=true],.seg button[aria-pressed=true]{background:var(--blue);color:#fff;border-color:var(--blue)}
-.seg{display:flex;gap:6px}
+/* top bar */
+header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;margin-right:auto}
+.brand i{display:inline-flex;gap:2px}
+.brand i b{width:6px;height:20px;background:var(--text);border-radius:2px}
+.brand i b:nth-child(2){background:var(--amber)}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:99px;background:var(--panel);border:1px solid var(--line);font-size:14px;color:var(--dim);white-space:nowrap}
+.pill .dot{width:9px;height:9px;border-radius:50%;background:var(--faint)}
+.pill.ok .dot{background:var(--green)} .pill.warn .dot{background:var(--amber)} .pill.bad .dot{background:var(--red)}
+.pill.ok,.pill.warn,.pill.bad{color:var(--text)}
+
+.mic{display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:99px;border:2px solid var(--line);background:var(--panel);font-weight:700}
+.mic svg{width:20px;height:20px}
+.mic[aria-pressed=true]{border-color:var(--amber);background:var(--amber-dim)}
+.mic[aria-pressed=true] svg{animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.4}}
+
+/* layout */
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;padding:18px 20px 24px;max-width:1500px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+h2{font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 12px;font-weight:700}
+
+/* banner */
+.banner{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding:16px 20px}
+.banner .big{font-size:24px;font-weight:700}
+.banner .sub{color:var(--dim)}
+.banner .icon{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--panel2);font-weight:700;font-size:20px}
+.banner.ready .icon{background:#1d3b28;color:var(--green)}
+.banner.cal .icon{background:var(--amber-dim);color:var(--amber)}
+.banner.off .icon{background:#43191b;color:var(--red)}
+
+/* camera */
+.stage{position:relative;overflow:hidden;aspect-ratio:16/9;max-height:min(52vh,560px);width:100%;background:#07090c}
+.stage img{width:100%;height:100%;object-fit:contain;display:block}
+.stage .nocam{position:absolute;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:var(--dim)}
+.stage.dead .nocam{display:grid} .stage.dead img{visibility:hidden}
+.hint{position:absolute;left:12px;right:12px;bottom:12px;padding:12px 16px;border-radius:10px;background:rgba(13,16,21,.88);border-left:4px solid var(--amber);font-size:18px;display:none}
+.hint.show{display:block}
+
+/* piano */
+.pianowrap{padding:18px 18px 20px}
+.piano{position:relative;display:grid;grid-template-columns:repeat(8,1fr);gap:6px;height:190px}
+.wkey{position:relative;border:none;border-radius:0 0 10px 10px;background:#eef0f3;color:#1b1f26;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding-bottom:12px;font-size:26px;font-weight:700;transition:background .06s,transform .06s}
+.wkey small{font-size:12px;font-weight:400;color:#5d6574;margin-top:2px}
+.wkey:hover{background:#fff}
+.wkey.on{background:var(--amber);transform:translateY(3px)}
+.wkey.target{box-shadow:inset 0 0 0 5px var(--blue)}
+.wkey.target::after{content:"next";position:absolute;top:10px;font-size:12px;color:var(--blue);letter-spacing:.05em;text-transform:uppercase}
+.bkey{position:absolute;top:0;height:58%;width:calc(100%/8*.5);z-index:1;background:#14171c;border-radius:0 0 6px 6px;pointer-events:none;transform:translateX(-50%)}
+.pianometa{display:flex;justify-content:space-between;gap:12px;margin-top:12px;color:var(--dim);font-size:15px;flex-wrap:wrap}
+.pianometa b{color:var(--text)}
+
+/* controls */
+.controls{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:0 18px 18px}
+.ctl{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);text-align:left;min-height:76px}
+.ctl:hover{border-color:var(--faint)}
+.ctl b{font-size:18px}
+.ctl span{font-size:13px;color:var(--dim)}
+.ctl kbd{margin-top:auto;font-size:12px;color:var(--faint);font-family:inherit}
+.ctl.stop{background:#3a1416;border-color:#6b2226}
+.ctl.stop b{color:#ffd0d2}
+
+/* side */
+aside{display:flex;flex-direction:column;gap:18px;min-width:0}
+.sect{padding:18px}
+.steps{display:flex;gap:6px;margin-bottom:16px}
+.steps div{flex:1;height:6px;border-radius:3px;background:var(--line)}
+.steps div.done{background:var(--green)} .steps div.now{background:var(--amber)}
+.stepname{font-size:20px;font-weight:700;margin:0 0 4px}
+.stepsub{color:var(--dim);margin:0}
+
+.profiles{display:grid;gap:8px}
+.prof{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;border:2px solid var(--line);background:var(--panel2);text-align:left;width:100%}
+.prof:hover{border-color:var(--faint)}
+.prof[aria-checked=true]{border-color:var(--amber);background:#2a2316}
+.prof .ic{flex:none;width:38px;height:38px;border-radius:10px;background:var(--bg);display:grid;place-items:center;font-weight:700;font-size:14px;color:var(--amber)}
+.prof b{display:block}
+.prof span{font-size:14px;color:var(--dim)}
+
+.field{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.field label{font-size:14px;color:var(--dim)}
+.field input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 12px;color:var(--text);font:inherit}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+input[type=range]{width:100%;accent-color:var(--amber);height:28px}
+.small{font-size:13px;color:var(--faint)}
+
+.voice .heard{min-height:54px;padding:12px 14px;border-radius:10px;background:var(--bg);font-size:18px}
+.voice .heard em{color:var(--faint);font-style:normal}
+.voice .did{margin-top:8px;color:var(--green);font-size:15px;min-height:20px}
+.voice .did.err{color:var(--amber)}
+.cmds{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.cmds span{padding:5px 10px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);font-size:14px}
+.toggle{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:15px;color:var(--dim)}
+.toggle input{width:18px;height:18px;accent-color:var(--amber)}
+
+.warns{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.warns li{padding:10px 12px;border-radius:10px;background:#2a2316;border-left:3px solid var(--amber);font-size:15px}
+
+details{color:var(--dim);font-size:14px}
+details summary{cursor:pointer;padding:4px 0}
+details pre{white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:8px;max-height:220px;overflow:auto;font-size:12px}
+.linkbtn{background:none;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--dim)}
+
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:12px 18px;border-radius:12px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:calc(100% - 32px);z-index:5}
+.toast.show{opacity:1}
+
+
+/* floor map */
+.floor{padding:18px}
+.floor .tip{color:var(--dim);margin:0 0 14px;font-size:15px}
+.lane{margin-top:12px}
+.lane .who{display:flex;align-items:center;gap:8px;font-weight:700;margin-bottom:8px}
+.lane .who span{font-weight:400;color:var(--faint);font-size:14px}
+.tiles{display:grid;gap:6px}
+.tile{position:relative;border-radius:10px;background:var(--panel2);border:2px dashed var(--line);padding:12px 6px 10px;text-align:center;min-height:86px;display:flex;flex-direction:column;justify-content:center;transition:background .08s,border-color .08s}
+.tile b{font-size:26px;line-height:1}
+.tile small{display:block;margin-top:6px;font-size:12px;color:var(--dim)}
+.tile.home{border-style:solid;border-color:var(--green);background:#14261b}
+.tile.home small{color:var(--green);font-weight:700}
+.tile.on{background:var(--amber);border-color:var(--amber);color:#1b1f26}
+.tile.on small{color:#3b2a08}
+.tile.next{box-shadow:inset 0 0 0 3px var(--blue)}
+.floor .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:13px;color:var(--faint)}
+.floor .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px}
+@media (max-width:620px){ .tile b{font-size:20px} .tile{min-height:72px;padding:10px 2px 8px} .tile small{font-size:11px} }
+@media (max-width:1020px){
+  main{grid-template-columns:1fr}
+}
+@media (max-width:620px){
+  header{padding:10px 16px}
+  main{padding:14px 16px 24px;gap:14px}
+  .controls{grid-template-columns:1fr 1fr}
+  .piano{height:150px;gap:4px}
+  .wkey{font-size:20px}
+  .wkey small{display:none}
+  .banner .big{font-size:20px}
+  .mic span{display:none}
+  .pills .pill.opt{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
+
 <header>
-  <h1>Air Piano</h1>
-  <div class="chips" aria-live="polite">
-    <button class="alt" id="btnChange" hidden>Change who plays</button>
-    <div class="chip" id="chipTrack"><i class="dot"></i><span>Server offline</span></div>
-    <div class="chip" id="chipPico"><i class="dot"></i><span>Piano not connected</span></div>
-    <div class="chip" id="chipFps"><i class="dot"></i><span>0 fps</span></div>
+  <div class="brand"><i aria-hidden="true"><b></b><b></b><b></b></i>Open Keys</div>
+  <div class="pills" role="status" aria-label="System status">
+    <div class="pill" id="pServer"><span class="dot"></span><span>Connecting…</span></div>
+    <div class="pill" id="pPico"><span class="dot"></span><span>Piano</span></div>
+    <div class="pill opt" id="pMode"><span class="dot"></span><span>Mode</span></div>
+    <div class="pill opt" id="pFps"><span class="dot"></span><span>— fps</span></div>
   </div>
+  <button class="mic" id="micBtn" aria-pressed="false" title="Voice control (V)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    <span id="micLabel">Voice off</span>
+  </button>
 </header>
 
-<section class="setup" id="setup" aria-labelledby="setupH">
-  <h2 id="setupH">Who’s playing?</h2>
-  <p>Choose the body parts you want to play with, in any mix. For a hand, play with the whole hand or pick the exact fingers you use. You can change this at any time.</p>
-  <div class="limbs" id="limbBtns"></div>
-  <div class="presets" id="presets" role="group" aria-label="Quick picks"></div>
-  <button id="btnGo" disabled>Start playing</button>
-  <p class="hint" id="goHint">Pick at least one body part.</p>
-</section>
-
-<main hidden id="app">
-  <section>
-    <div class="stage" id="stage">
-      <img id="video" alt="Live camera view with note lanes and tracked body parts">
-      <div class="cta" id="cta"><p id="ctaText">Connecting to the Air Piano server…</p></div>
+<main>
+  <section class="card banner" id="banner" aria-live="polite">
+    <div class="icon" id="bIcon">…</div>
+    <div>
+      <div class="big" id="bBig">Connecting to the piano…</div>
+      <div class="sub" id="bSub">Make sure web_server.py is running.</div>
     </div>
-    <div class="banner" id="banner" hidden role="status"></div>
-    <div class="keys" id="keys" role="group" aria-label="Piano keys"></div>
-    <p class="hint">Click a key, or press A S D F G H J K, to test the servos without moving.</p>
   </section>
 
-  <aside class="side">
-    <div class="card">
-      <h2>Controls</h2>
-      <div class="row">
-        <button id="btnRecal">Recalibrate</button>
-        <button class="alt" id="btnStop">Release all keys</button>
+  <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+    <section class="card" style="overflow:hidden">
+      <div class="stage dead" id="stage">
+        <img id="video" alt="Camera view with body tracking and key zones">
+        <div class="nocam"><div><b style="color:var(--text);font-size:19px">Camera starts once you pick how to play</b><br>Still blank after that? On a Mac: System Settings → Privacy &amp; Security → Camera, turn on Terminal, then restart the server.</div></div>
+        <div class="hint" id="hint" aria-live="polite"></div>
       </div>
-      <div class="row" style="margin-top:8px">
-        <button class="alt" id="btnMode">Mode</button>
-        <button class="alt" id="btnSong">Song</button>
+    </section>
+
+    <section class="card">
+      <div class="pianowrap">
+        <h2>Keys <span class="small" style="text-transform:none;letter-spacing:0">· click or say "play E" to test a key</span></h2>
+        <div class="piano" id="piano"></div>
+        <div class="pianometa">
+          <span>Playing: <b id="nowPlaying">—</b></span>
+          <span id="songLine"></span>
+        </div>
       </div>
-      <p class="hint" id="modeHint"></p>
-      <p class="hint">To recalibrate, rest your feet flat or hands open and hold still for about a second.</p>
-    </div>
+      <div class="controls">
+        <button class="ctl" data-act="MODE"><b>Change mode</b><span id="modeDesc">Switch how keys work</span><kbd>M · "next mode"</kbd></button>
+        <button class="ctl" data-act="SONG"><b>Next song</b><span>For guided mode</span><kbd>S · "next song"</kbd></button>
+        <button class="ctl" data-act="RECAL"><b>Recalibrate</b><span>Stand still, 2 sec</span><kbd>R · "calibrate"</kbd></button>
+        <button class="ctl stop" data-act="STOP"><b>Stop all</b><span>Lift every key</span><kbd>Esc · "stop"</kbd></button>
+      </div>
+    </section>
+  </div>
 
-    <div class="card">
-      <h2>Play settings</h2>
-      <label><span>Sensitivity <b id="vSens"></b></span><input type="range" id="sens" min="0.2" max="5" step="0.1"></label>
-      <label><span>Note length <b id="vLen"></b></span><input type="range" id="len" min="0.05" max="1.5" step="0.05"></label>
-      <label><span>Lane width <b id="vZone"></b></span><input type="range" id="zone" min="0.03" max="0.3" step="0.01"></label>
-      <div class="check"><input type="checkbox" id="sustain"><label for="sustain" style="margin:0">Hold the note while the body part is held</label></div>
-      <div class="check"><input type="checkbox" id="sound"><label for="sound" style="margin:0">Play sound in this browser (when the laptop isn’t)</label></div>
-      <button id="btnApply" disabled>Apply changes</button>
-      <p class="hint">Applying changes restarts calibration.</p>
-    </div>
+  <aside>
+    <section class="card sect" aria-labelledby="stepTitle">
+      <div class="steps" aria-hidden="true"><div id="s1"></div><div id="s2"></div><div id="s3"></div></div>
+      <p class="stepname" id="stepTitle">Step 1 · How will you play?</p>
+      <p class="stepsub" id="stepSub">Pick what the camera should watch.</p>
+    </section>
 
-    <div class="card"><h2>Activity</h2><pre id="log"></pre></div>
+    <section class="card sect">
+      <h2 id="profH">Play with</h2>
+      <div class="profiles" id="profiles" role="radiogroup" aria-labelledby="profH"></div>
+      <div class="field">
+        <label for="player">Player name <span class="small">(saves what it learns about you)</span></label>
+        <input type="text" id="player" placeholder="Optional" autocomplete="off">
+      </div>
+    </section>
+
+    <section class="card sect voice" aria-labelledby="voiceH">
+      <h2 id="voiceH">Voice</h2>
+      <div class="heard" id="heard"><em>Turn on voice, then say "help".</em></div>
+      <div class="did" id="did" aria-live="assertive"></div>
+      <div class="cmds" id="cmds"></div>
+      <label class="toggle"><input type="checkbox" id="speakBack" checked> Read updates out loud</label>
+    </section>
+
+    <section class="card sect">
+      <h2>Comfort</h2>
+      <div class="row"><label for="sens">Tap sensitivity</label><span id="sensV" class="small"></span></div>
+      <input type="range" id="sens" min="0.5" max="3" step="0.25" value="1">
+      <div class="row" style="margin-top:10px"><label for="zw">Key zone size</label><span id="zwV" class="small"></span></div>
+      <input type="range" id="zw" min="0.03" max="0.3" step="0.01" value="0.1">
+      <div class="row" style="margin-top:10px"><label for="len">Note length</label><span id="lenV" class="small"></span></div>
+      <input type="range" id="len" min="0.05" max="1.5" step="0.05" value="0.25">
+      <label class="toggle"><input type="checkbox" id="sustain"> Hold the note while the foot/finger is held</label>
+      <label class="toggle"><input type="checkbox" id="beep"> Play sound in this browser (when the laptop isn't)</label>
+      <p class="small" style="margin:10px 0 0">Changing these recalibrates, so hold still for a moment after.</p>
+    </section>
+
+    <section class="card sect" id="warnBox" hidden>
+      <h2>Heads up</h2>
+      <ul class="warns" id="warns"></ul>
+    </section>
+
+    <section class="card sect">
+      <details>
+        <summary>Technical details</summary>
+        <pre id="raw">No data yet.</pre>
+        <button class="linkbtn" id="copyRaw">Copy</button>
+      </details>
+    </section>
   </aside>
 </main>
 
-<script type="module">
-const NOTES = ['C','D','E','F','G','A','B','C'];
-const HOTKEYS = ['a','s','d','f','g','h','j','k'];
-const FINGERS = ['thumb','index','middle','ring','pinky'];
-const LIMBS = [
-  {id: 'L_HAND', label: 'Left hand', hand: true}, {id: 'R_HAND', label: 'Right hand', hand: true},
-  {id: 'L_FOOT', label: 'Left foot', sub: 'tracked at the toe'}, {id: 'R_FOOT', label: 'Right foot', sub: 'tracked at the toe'}];
+<div class="toast" id="toast" role="status"></div>
+<div class="sr" id="sr" aria-live="polite"></div>
+
+<script>
+"use strict";
+const NOTES = ["C","D","E","F","G","A","B","C"];
+const NOTE_SUB = ["low","","","","","","","high"];
+const MODE_INFO = {
+  FREE:   ["Free play", "Every zone plays its own note"],
+  GUIDED: ["Guided song", "The next note lights up, any tap plays it"],
+  CHORD:  ["Chords", "Each zone plays a full chord"],
+  SPLIT:  ["Split", "One side plays chords, the other melody"],
+};
+const PROFILE_INFO = {
+  two_feet:         ["2F", "Two feet", "Left foot low notes, right foot high notes"],
+  one_foot:         ["1F", "One foot", "Slide sideways to pick a key, lift to play"],
+  hand_foot:        ["H+F", "Right hand + left foot", "Fingers play melody, foot plays chords"],
+  hand_foot_mirror: ["F+H", "Left hand + right foot", "Fingers play melody, foot plays chords"],
+  one_hand_fingers: ["1H", "One hand", "Each finger curls to play a key"],
+  two_hands:        ["2H", "Two hands", "All ten fingers"],
+};
 const $ = id => document.getElementById(id);
-const DEF = {pick: {L_FOOT: null, R_FOOT: null}, cfg: {sensitivity: 1, tap_len: .25, zone_width: .1, sustain: false}, sound: false};
-let S = DEF;
-try { S = {...DEF, ...JSON.parse(localStorage.getItem('airpiano') || '{}')}; } catch {}
-const save = () => { try { localStorage.setItem('airpiano', JSON.stringify(S)); } catch {} };
-const post = async (path, body) => {
-  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("ok_"+k); return v===null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("ok_"+k, JSON.stringify(v)); }catch(e){} },
 };
-const logEl = $('log');
-const log = m => { logEl.textContent += `${new Date().toLocaleTimeString()}  ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
-const chip = (id, on, text) => { $(id).classList.toggle('on', on); $(id).lastElementChild.textContent = text; };
 
-/* ---------- Who is playing ---------- */
-/* pick[id] = null (foot, or whole hand) or an array of fingers (hand) */
-let pick = {...S.pick}, fingerMode = {};
-LIMBS.filter(l => l.hand).forEach(l => fingerMode[l.id] = Array.isArray(pick[l.id]));
-const PRESETS = [['Both feet', ['L_FOOT','R_FOOT']], ['Both hands', ['L_HAND','R_HAND']],
-  ['Left hand + left foot', ['L_HAND','L_FOOT']], ['Right hand + right foot', ['R_HAND','R_FOOT']],
-  ['Left hand + right foot', ['L_HAND','R_FOOT']], ['Right hand + left foot', ['R_HAND','L_FOOT']],
-  ['All four', ['L_HAND','R_HAND','L_FOOT','R_FOOT']]];
-const mk = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || '', innerHTML: html || ''});
-function renderSetup() {
-  const box = $('limbBtns'); box.innerHTML = '';
-  LIMBS.forEach(l => {
-    const on = l.id in pick, card = mk('div', 'limbcard');
-    const b = mk('button', 'limb', `<i></i><span>${l.label}<small>${l.hand ? 'tracked at the wrist' : l.sub}</small></span>`);
-    b.type = 'button'; b.setAttribute('aria-pressed', on);
-    b.onclick = () => { on ? delete pick[l.id] : pick[l.id] = fingerMode[l.id] ? [...FINGERS] : null; renderSetup(); };
-    card.append(b);
-    if (on && l.hand) {
-      const sub = mk('div', 'sub'), seg = mk('div', 'seg');
-      [['Whole hand', false], ['Choose fingers', true]].forEach(([t, f]) => {
-        const s = mk('button', '', t); s.type = 'button'; s.setAttribute('aria-pressed', fingerMode[l.id] === f);
-        s.onclick = () => { fingerMode[l.id] = f; pick[l.id] = f ? [...FINGERS] : null; renderSetup(); };
-        seg.append(s);
-      });
-      sub.append(seg);
-      if (fingerMode[l.id]) {
-        const fg = mk('div', 'fing');
-        FINGERS.forEach(f => {
-          const c = mk('button', '', f); c.type = 'button'; c.setAttribute('aria-pressed', pick[l.id].includes(f));
-          c.onclick = () => { const a = pick[l.id]; a.includes(f) ? a.splice(a.indexOf(f), 1) : a.push(f); renderSetup(); };
-          fg.append(c);
-        });
-        sub.append(fg);
-      }
-      card.append(sub);
-    }
-    box.append(card);
+/* ---------- server calls ---------- */
+async function post(path, body){
+  try{
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    if(!r.ok){ const t = await r.text(); toast(t.slice(0,160) || ("Error "+r.status)); return false; }
+    return true;
+  }catch(e){ toast("Can't reach the server"); return false; }
+}
+const action = name => post("/api/action", {name});
+const tapKey = k => { flash(k); return post("/api/key", {k}); };
+
+/* ---------- presets / profile ---------- */
+let presets = {};          // key -> profile dict
+let selected = store.get("profile", null);
+const settings = Object.assign({sensitivity:1, zone_width:0.1, sustain:false, tap_len:0.25}, store.get("settings", {}));
+
+async function loadPresets(){
+  try{
+    const r = await fetch("/api/presets"); const d = await r.json();
+    if(Array.isArray(d)) d.forEach((p,i)=>{ presets[p.key || p.id || p.name || ("p"+i)] = p.profile || p; });
+    else for(const k in d) presets[k] = (d[k] && d[k].profile) || d[k];
+  }catch(e){
+    Object.keys(PROFILE_INFO).forEach(k => presets[k] = null);
+  }
+  renderProfiles();
+}
+function renderProfiles(){
+  const box = $("profiles"); box.innerHTML = "";
+  for(const k of Object.keys(presets)){
+    const info = PROFILE_INFO[k] || [k.slice(0,2).toUpperCase(), (presets[k]&&presets[k].name) || k.replace(/_/g," "), ""];
+    const b = document.createElement("button");
+    b.className = "prof"; b.setAttribute("role","radio"); b.dataset.k = k;
+    b.setAttribute("aria-checked", String(k===selected));
+    b.innerHTML = `<span class="ic" aria-hidden="true">${info[0]}</span><span><b>${info[1]}</b><span>${info[2]}</span></span>`;
+    b.onclick = () => chooseProfile(k);
+    box.appendChild(b);
+  }
+}
+async function chooseProfile(k, spoken){
+  if(!(k in presets)) return;
+  selected = k; store.set("profile", k); renderProfiles();
+  const ok = await sendProfile();
+  if(ok){ const n = (PROFILE_INFO[k]||[0,k])[1]; say(n + ". Hold still to calibrate."); if(spoken) did(n); }
+}
+function buildProfile(){
+  const base = presets[selected];
+  if(!base) return null;
+  const p = JSON.parse(JSON.stringify(base));
+  p.sensitivity = settings.sensitivity;
+  p.zone_width = settings.zone_width;
+  p.sustain = settings.sustain;
+  p.tap_len = settings.tap_len;
+  const user = $("player").value.trim();
+  p.meta = Object.assign({}, p.meta || {}, {ui:"open-keys"});
+  if(user) p.meta.user = user.toLowerCase().replace(/[^a-z0-9_-]/g,"_").slice(0,40); else delete p.meta.user;
+  return p;
+}
+async function sendProfile(){
+  const p = buildProfile();
+  if(!p){ toast("Profile list didn't load from the server"); return false; }
+  return post("/api/profile", p);
+}
+
+/* ---------- settings ---------- */
+function syncSettingsUI(){
+  $("sens").value = settings.sensitivity; $("zw").value = settings.zone_width; $("sustain").checked = settings.sustain; $("len").value = settings.tap_len;
+  $("lenV").textContent = settings.tap_len.toFixed(2) + " s";
+  $("sensV").textContent = settings.sensitivity <= 0.75 ? "needs a big lift" : settings.sensitivity >= 2 ? "tiny movements count" : "normal";
+  $("zwV").textContent = settings.zone_width <= 0.08 ? "small" : settings.zone_width >= 0.15 ? "large" : "medium";
+}
+let settingsTimer;
+function changeSetting(k, v){
+  settings[k] = v; store.set("settings", settings); syncSettingsUI();
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => { if(selected) sendProfile(); }, 500);
+}
+$("sens").oninput = e => changeSetting("sensitivity", +e.target.value);
+$("zw").oninput = e => changeSetting("zone_width", +e.target.value);
+$("len").oninput = e => changeSetting("tap_len", +e.target.value);
+$("beep").checked = store.get("beep", true);
+$("beep").onchange = e => { store.set("beep", e.target.checked); if(e.target.checked){ unlockAudio(); beep(0); } };
+function unlockAudio(){
+  try{ actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if(actx.state === "suspended") actx.resume(); }catch(e){}
+}
+["pointerdown","keydown","touchstart"].forEach(ev => document.addEventListener(ev, unlockAudio, {passive:true}));
+$("sustain").onchange = e => changeSetting("sustain", e.target.checked);
+$("player").value = store.get("player", "");
+$("player").onchange = e => { store.set("player", e.target.value.trim()); if(selected) sendProfile(); };
+
+/* ---------- piano ---------- */
+const keyEls = [];
+(function buildPiano(){
+  const p = $("piano");
+  NOTES.forEach((n,i) => {
+    const b = document.createElement("button");
+    b.className = "wkey"; b.innerHTML = n + (NOTE_SUB[i] ? `<small>${NOTE_SUB[i]}</small>` : "<small>&nbsp;</small>");
+    b.setAttribute("aria-label", `Test key ${i+1}, ${NOTE_SUB[i]} ${n}`);
+    b.onclick = () => tapKey(i);
+    p.appendChild(b); keyEls.push(b);
   });
-  const ok = Object.keys(pick).length && Object.values(pick).every(v => v === null || v.length);
-  $('btnGo').disabled = !ok;
-  $('goHint').hidden = !!ok;
-  $('goHint').textContent = Object.keys(pick).length ? 'Pick at least one finger for each hand using fingers.' : 'Pick at least one body part.';
-}
-PRESETS.forEach(([name, ids]) => {
-  const b = mk('button', 'alt', name); b.type = 'button';
-  b.onclick = () => { pick = {}; ids.forEach(i => { pick[i] = null; fingerMode[i] = false; }); renderSetup(); };
-  $('presets').append(b);
-});
-function buildProfile() {
-  const ids = LIMBS.map(l => l.id).filter(i => i in pick);
-  const effectors = ids.map(id => id.endsWith('FOOT') ? {id, zones: 4} : pick[id] ? {id, fingers: pick[id]} : {id});
-  const first = ids.find(i => i.endsWith('FOOT'));
-  const name = ids.map(i => LIMBS.find(l => l.id === i).label.toLowerCase()).join(' + ');
-  return {name, effectors, mode: 'FREE', ...(first ? {chords: first} : {}), sensitivity: S.cfg.sensitivity,
-          zone_width: S.cfg.zone_width, sustain: S.cfg.sustain, tap_len: S.cfg.tap_len};
-}
-const showSetup = on => { $('setup').hidden = !on; $('app').hidden = on; $('btnChange').hidden = on; if (on) renderSetup(); };
-$('btnGo').onclick = async () => {
-  S.pick = pick; save();
-  try { await post('/api/profile', buildProfile()); log('Playing with: ' + buildProfile().name + '.'); showSetup(false); }
-  catch (e) { $('goHint').hidden = false; $('goHint').textContent = 'Could not start: ' + e.message + ' Is web_server.py running?'; }
-};
-$('btnChange').onclick = () => showSetup(true);
-showSetup(true);
+  [1,2,4,5,6].forEach(i => { const d = document.createElement("div"); d.className = "bkey"; d.style.left = `calc(${i}*100%/8 - 3px*${(8-i)/8})`; p.appendChild(d); });
+})();
+let flashes = {};
+function flash(k){ flashes[k] = Date.now() + 250; paintKeys(); setTimeout(paintKeys, 260); }
 
-/* ---------- Piano keys ---------- */
-const keysEl = $('keys');
-NOTES.forEach((n, i) => {
-  const b = mk('button', 'key', `<small>${HOTKEYS[i].toUpperCase()}</small>${n}`);
-  b.type = 'button'; b.setAttribute('aria-label', `Test ${n}, key ${i + 1}`);
-  b.addEventListener('pointerdown', () => post('/api/key', {k: i}).catch(e => log('Key failed: ' + e.message)));
-  keysEl.append(b);
-});
-const keyEls = [...keysEl.children];
-addEventListener('keydown', e => {
-  if (e.repeat || $('app').hidden || /INPUT|SELECT/.test(e.target.tagName)) return;
-  const i = HOTKEYS.indexOf(e.key.toLowerCase()); if (i >= 0) post('/api/key', {k: i}).catch(() => {});
-});
-let actx; const FREQ = [261.63, 293.66, 329.63, 349.23, 392, 440, 493.88, 523.25];
-function beep(i) {
-  actx = actx || new AudioContext();
-  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
-  o.type = 'triangle'; o.frequency.value = FREQ[i];
-  g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.3, t + .01); g.gain.exponentialRampToValueAtTime(.0001, t + .5);
-  o.connect(g).connect(actx.destination); o.start(); o.stop(t + .6);
+/* ---------- live state ---------- */
+let S = {held:[], mode:null, cal:null, status:"", hint:"", warnings:[], pico:null, profile:null, song:null, target:null, live:false};
+let lastRaw = null, prev = {};
+
+const first = (o, names) => { for(const n of names) if(o && o[n] !== undefined && o[n] !== null) return o[n]; };
+function flatten(o){
+  const f = Object.assign({}, o);
+  for(const k in o) if(o[k] && typeof o[k] === "object" && !Array.isArray(o[k]))
+    for(const j in o[k]) if(!(j in f)) f[j] = o[k][j];
+  return f;
+}
+function toKeys(v){
+  if(v == null) return [];
+  if(Array.isArray(v)){
+    if(v.length && typeof v[0] === "boolean") return v.map((x,i)=>x?i:-1).filter(i=>i>=0);
+    return v.map(Number).filter(n => n>=0 && n<8);
+  }
+  if(typeof v === "object") return Object.keys(v).filter(k=>v[k]).map(Number).filter(n=>n>=0&&n<8);
+  if(typeof v === "number") return [v];
+  return [];
+}
+function normalize(raw){
+  const f = flatten(raw);
+  const n = {};
+  n.held = toKeys(first(f, ["held","held_keys","keys_down","down","pressed","active","keys","notes"]));
+  const m = first(f, ["mode","play_mode"]); n.mode = typeof m === "string" ? m.toUpperCase() : null;
+  let cal = first(f, ["calibrating","is_calibrating"]);
+  const st = first(f, ["state","rig_state"]);
+  let status = first(f, ["status","cal_status","calibration_status","message","msg"]);
+  if(typeof status !== "string") status = "";
+  if(cal === undefined){
+    const c = first(f, ["calibration","cal"]);
+    if(typeof c === "boolean") cal = c;
+    else if(typeof c === "string") { cal = !/done|ok|ready|complete/i.test(c); if(!status) status = c; }
+    else if(st) cal = /CAL/i.test(st);
+    else if(status) cal = /calibrat/i.test(status);
+    else cal = null;
+  }
+  n.cal = cal; n.status = status;
+  n.hint = first(f, ["setup_hint","hint","advice"]) || "";
+  const w = first(f, ["warnings","warning"]); n.warnings = Array.isArray(w) ? w : (w ? [w] : []);
+  let p = first(f, ["pico","pico_ok","pico_connected","link","connected","hardware"]);
+  if(p && typeof p === "object") p = first(p, ["ok","connected","open","alive"]) ?? true;
+  if(typeof p === "string") p = !/none|off|no|fail|dry|disconnect|false/i.test(p);
+  n.pico = (p === undefined) ? null : !!p;
+  n.link_error = f.link_error || "";
+  n.error = f.error || "";
+  n.sound = !!f.sound;
+  n.fps = typeof f.fps === "number" ? f.fps : null;
+  n.running = !!f.profile;
+  let pr = first(f, ["profile","profile_name","preset"]);
+  if(pr && typeof pr === "object") pr = pr.name;
+  n.profile = pr || null;
+  let sg = first(f, ["song","song_name","current_song"]);
+  if(sg && typeof sg === "object") sg = sg.name || sg.title;
+  n.song = typeof sg === "string" ? sg : null;
+  const tg = first(f, ["next","next_key","target","guide","guide_key"]);
+  n.target = typeof tg === "number" ? tg : (Array.isArray(tg) ? tg[0] : (typeof tg === "string" ? noteIndex(tg) : null));
+  n.nextName = typeof tg === "string" ? tg : (typeof n.target === "number" ? NOTES[n.target] : "");
+  return n;
 }
 
-/* ---------- Controls & settings ---------- */
-const act = name => post('/api/action', {name}).catch(e => log(name + ' failed: ' + e.message));
-$('btnRecal').onclick = () => act('RECAL'); $('btnStop').onclick = () => act('STOP');
-$('btnMode').onclick = () => act('MODE'); $('btnSong').onclick = () => act('SONG');
-const sets = [['sens', 'sensitivity', 'vSens', v => v.toFixed(1) + '×'], ['len', 'tap_len', 'vLen', v => v.toFixed(2) + ' s'],
-              ['zone', 'zone_width', 'vZone', v => Math.round(v * 100) + '% of width']];
-sets.forEach(([id, key, out, f]) => {
-  $(id).value = S.cfg[key]; $(out).textContent = f(S.cfg[key]);
-  $(id).oninput = () => { S.cfg[key] = +$(id).value; $(out).textContent = f(S.cfg[key]); $('btnApply').disabled = false; };
-});
-$('sustain').checked = S.cfg.sustain; $('sustain').oninput = () => { S.cfg.sustain = $('sustain').checked; $('btnApply').disabled = false; };
-$('sound').checked = S.sound; $('sound').oninput = () => { S.sound = $('sound').checked; save(); };
-$('btnApply').onclick = async () => {
-  save();
-  try { await post('/api/profile', buildProfile()); $('btnApply').disabled = true; log('Settings applied. Recalibrating.'); }
-  catch (e) { log('Could not apply: ' + e.message); }
-};
-
-/* ---------- Live state from the server ---------- */
-let prevHeld = [], started = false;
-function banner(text, bad) { const b = $('banner'); b.hidden = !text; b.textContent = text || ''; b.classList.toggle('bad', !!bad); }
-function onState(s) {
-  if (s.starting) { $('ctaText').textContent = 'Loading the pose model. The first run downloads it and can take a minute.'; return; }
-  if (!started && s.profile) { started = true; $('video').src = '/video'; $('cta').hidden = true; }
-  if (s.error && !s.profile) { $('cta').hidden = false; $('ctaText').textContent = s.error; chip('chipTrack', false, 'Tracking stopped'); return; }
-  chip('chipTrack', !s.calibrating, s.calibrating ? 'Calibrating' : 'Tracking');
-  chip('chipPico', s.pico && !s.link_error, !s.pico ? (s.sound ? 'No piano (laptop sound)' : 'No piano (test mode)') : s.link_error ? 'Piano link problem' : 'Piano connected');
-  chip('chipFps', s.fps > 8, `${s.fps} fps`);
-  $('btnMode').textContent = 'Mode: ' + s.mode;
-  $('modeHint').textContent = s.mode === 'GUIDED' ? `Song: ${s.song}. Next note: ${s.next}.` : { FREE: 'Each lane or finger plays its own note.', CHORD: 'Each lane or finger plays a chord.', SPLIT: 'One body part plays chords, the rest play the melody.' }[s.mode] || '';
-  banner(s.error || (s.link_error ? 'Piano link problem: ' + s.link_error : s.calibrating ? s.status : s.warnings?.[0]), !!(s.error || s.link_error));
-  keyEls.forEach((k, i) => k.classList.toggle('on', s.held.includes(i)));
-  s.held.filter(k => !prevHeld.includes(k)).forEach(k => { log(NOTES[k] + ' pressed'); if (S.sound && !s.sound) beep(k); });
-  prevHeld = s.held;
+function connect(){
+  const es = new EventSource("/events");
+  es.onopen = () => { S.live = true; render(); };
+  es.onmessage = e => {
+    try{ lastRaw = JSON.parse(e.data); }catch(err){ return; }
+    const before = S.held.slice();
+    Object.assign(S, normalize(lastRaw), {live:true});
+    if($("beep").checked && !S.sound) S.held.filter(k => !before.includes(k)).forEach(beep);
+    render();
+  };
+  es.onerror = () => { S.live = false; render(); };   // EventSource retries by itself
 }
-const es = new EventSource('/events');
-es.onmessage = e => onState(JSON.parse(e.data));
-es.onerror = () => { chip('chipTrack', false, 'Server offline'); $('cta').hidden = false; $('ctaText').textContent = 'Can’t reach the Air Piano server. Start it with: python web_server.py --port <your port>'; started = false; };
+
+
+/* ---------- floor map (mirrors pianolib/layout.py + rig.py) ---------- */
+const FINGERS = ["thumb","index","middle","ring","pinky"];
+const KEYSETS = {1:[0],2:[0,4],3:[0,2,4],4:[0,2,4,7],5:[0,1,2,4,5],6:[0,1,2,4,5,7],7:[0,1,2,3,4,5,6],8:[0,1,2,3,4,5,6,7]};
+const CHORD_DEG = {1:[0],2:[0,4],3:[0,3,4],4:[0,3,4,5],5:[0,1,3,4,5],6:[0,1,2,3,4,5],7:[0,1,2,3,4,5,6]};
+const CHORD_NAMES = ["C","Dm","Em","F","G","Am","Bdim"];
+function spread(n, table, top){
+  if(n <= top) return table[n].slice();
+  const base = table[top]; return Array.from({length:n}, (_,i) => base[Math.min(base.length-1, Math.floor(i*base.length/n))]);
+}
+const noteActs = n => spread(n, KEYSETS, 8).map(k => ({keys:[k], label:NOTES[k]}));
+const chordActs = n => spread(n, CHORD_DEG, 7).map(d => ({keys:[d,(d+2)%7,(d+4)%7], label:CHORD_NAMES[d]}));
+function lanesFor(profile, mode){
+  if(!profile || !profile.effectors) return [];
+  const effs = profile.effectors.map(e => {
+    const side = e.id[0], kind = e.id.endsWith("FOOT") ? "foot" : "hand", fingers = e.fingers || [];
+    const usesF = kind === "hand" && fingers.length > 0;
+    const n = e.zones || (kind === "foot" ? 4 : 3);
+    const slots = usesF ? (side === "R" ? FINGERS : FINGERS.slice().reverse()).filter(f => fingers.includes(f)) : Array.from({length:n}, (_,i) => i);
+    return {id:e.id, side, kind, usesF, slots, home: usesF ? -1 : (side === "L" ? Math.floor(n/2) : Math.floor((n-1)/2))};
+  }).sort((a,b) => ((a.side==="R")-(b.side==="R")) || ((a.kind==="hand")-(b.kind==="hand")));
+  const all = []; effs.forEach(e => e.slots.forEach(s => all.push([e.id, s])));
+  let acts = {};
+  const assign = (slots, list) => slots.forEach((s,i) => acts[s[0]+"|"+s[1]] = list[i]);
+  if(mode === "GUIDED") all.forEach(s => acts[s[0]+"|"+s[1]] = {keys:[], label:"♪", next:true});
+  else if(mode === "CHORD") assign(all, chordActs(all.length));
+  else if(mode === "SPLIT" && effs.length >= 2){
+    const cid = profile.chords || (effs.find(e => e.kind === "foot") || effs[0]).id;
+    const cs = all.filter(s => s[0] === cid), ms = all.filter(s => s[0] !== cid);
+    assign(cs, chordActs(cs.length)); assign(ms, noteActs(ms.length));
+  } else assign(all, noteActs(all.length));
+  return effs.map(e => ({...e, tiles: e.slots.map((s,i) => {
+    const a = acts[e.id+"|"+s] || {keys:[], label:"?"};
+    let hint;
+    if(e.usesF) hint = "curl " + s;
+    else if(i === e.home) hint = "start";
+    else { const d = i - e.home; hint = Math.abs(d) + (d < 0 ? " ← left" : " right →"); }
+    return {...a, hint, home: i === e.home};
+  })}));
+}
+const LANE_NAME = {L_FOOT:"Left foot", R_FOOT:"Right foot", L_HAND:"Left hand", R_HAND:"Right hand"};
+let laneSig = "";
+function currentProfile(){
+  if(selected && presets[selected]) return buildProfile() || presets[selected];
+  for(const k in presets) if(presets[k] && presets[k].name === S.profile) return presets[k];
+  return null;
+}
+function renderFloor(){
+  const prof = currentProfile(), mode = S.mode || "FREE";
+  const sig = JSON.stringify([prof && prof.effectors, prof && prof.chords, mode, settings.zone_width]);
+  if(sig !== laneSig){
+    laneSig = sig;
+    const lanes = lanesFor(prof, mode);
+    const feet = lanes.some(l => !l.usesF);
+    // zone width -> rough cm: zone is zone_width x frame width; a 26 cm foot is ~0.22 frame heights at a good distance
+    const cm = Math.round(((prof ? prof.zone_width : 0.1) * 16/9) / 0.22 * 26 / 5) * 5;
+    let tip = "Pick how you'll play to see the map.";
+    if(lanes.length){
+      tip = feet ? `Stand still to calibrate. Wherever each foot is then becomes its green "start" square. Each square is about ${cm} cm wide: slide sideways to the square you want, then lift and tap.`
+                 : "Hold your hand open to calibrate, then curl one finger to play its note.";
+      if(mode === "GUIDED") tip += " Guided mode: every square plays the song's next note (shown on the squares), so tap anywhere.";
+      if(lanes.length > 1 && feet) tip += " The camera view shows the same squares as coloured bands.";
+    }
+    $("floorTip").textContent = tip;
+    $("lanes").innerHTML = lanes.map(l => `
+      <div class="lane"><div class="who">${LANE_NAME[l.id] || l.id}<span>${l.usesF ? "each finger is a key" : l.tiles.length + " squares, low notes on the left"}</span></div>
+      <div class="tiles" style="grid-template-columns:repeat(${l.tiles.length},1fr)">
+        ${l.tiles.map(t => `<div class="tile${t.home ? " home" : ""}" data-keys="${t.keys.join(",")}" data-next="${t.next ? 1 : 0}"><b>${t.label}</b><small>${t.hint}</small></div>`).join("")}
+      </div></div>`).join("");
+  }
+  const now = Date.now();
+  document.querySelectorAll("#lanes .tile").forEach(el => {
+    const ks = el.dataset.keys ? el.dataset.keys.split(",").map(Number) : [];
+    const lit = ks.some(k => S.held.includes(k) || (flashes[k]||0) > now);
+    el.classList.toggle("on", lit);
+    if(el.dataset.next === "1") el.firstElementChild.textContent = S.nextName || "♪";
+    el.classList.toggle("next", S.mode === "GUIDED" && el.dataset.next === "1");
+  });
+}
+/* ---------- render ---------- */
+function setPill(id, cls, text){ const el = $(id); el.className = "pill " + (cls||"") + (el.classList.contains("opt")?" opt":""); el.lastElementChild.textContent = text; }
+function paintKeys(){
+  const now = Date.now();
+  keyEls.forEach((el,i) => {
+    el.classList.toggle("on", S.held.includes(i) || (flashes[i]||0) > now);
+    el.classList.toggle("target", S.target === i && S.mode === "GUIDED");
+  });
+}
+function render(){
+  paintKeys();
+  setPill("pServer", S.live ? "ok" : "bad", S.live ? "Connected" : "Server offline");
+  setPill("pPico", S.pico === null ? "" : (S.pico && !S.link_error) ? "ok" : S.link_error ? "bad" : "warn",
+    S.pico === null ? "Piano ?" : !S.pico ? (S.sound ? "No piano (laptop sound)" : "No piano (test mode)") : S.link_error ? "Piano link problem" : "Piano connected");
+  setPill("pFps", S.fps === null ? "" : S.fps > 8 ? "ok" : "warn", S.fps === null ? "— fps" : Math.round(S.fps) + " fps");
+  const v = $("video");
+  if(S.running && !v.getAttribute("src")) v.src = "/video";
+  const mi = MODE_INFO[S.mode];
+  setPill("pMode", S.mode ? "ok" : "", mi ? mi[0] : (S.mode || "Mode"));
+  $("modeDesc").textContent = mi ? "Now: " + mi[0] : "Switch how keys work";
+  $("nowPlaying").textContent = S.held.length ? S.held.map(k => NOTES[k]).join(" + ") : "—";
+  $("songLine").innerHTML = (S.mode === "GUIDED" && S.song) ? `Song: <b>${esc(String(S.song))}</b>` + (S.nextName ? ` · next note <b>${esc(String(S.nextName))}</b>` : "") : "";
+
+  // banner + steps
+  let cls, icon, big, sub, step;
+  if(!S.live){ cls="off"; icon="!"; big="Can't reach the piano app"; sub="Start it with: python web_server.py --no-pico"; step=0; }
+  else if(S.error){ cls="off"; icon="!"; big="Tracking stopped"; sub=String(S.error); step=0; }
+  else if(S.link_error && !S.cal){ cls="off"; icon="!"; big="Piano link problem"; sub=String(S.link_error) + " (check the USB cable)"; step=3; }
+  else if(!selected && !S.profile){ cls=""; icon="1"; big="Choose how you'll play"; sub="Pick an option on the right, or say \"two feet\"."; step=1; }
+  else if(S.cal){ cls="cal"; icon="2"; big="Hold still, calibrating…"; sub=cleanStatus(S.status) || "Rest your feet flat or hands open for 2 seconds."; step=2; }
+  else { cls="ready"; icon="✓"; big="Ready, start playing"; sub = mi ? mi[1] + "." : "Tap to play a key."; step=3; }
+  $("banner").className = "card banner " + cls; $("bIcon").textContent = icon; $("bBig").textContent = big; $("bSub").textContent = sub;
+  ["s1","s2","s3"].forEach((id,i) => $(id).className = (i+1 < step || step===3) ? "done" : (i+1 === step ? "now" : ""));
+  const titles = {0:["Not connected","Waiting for the server."],1:["Step 1 · How will you play?","Pick what the camera should watch."],2:["Step 2 · Get in position","Stay in view and hold still."],3:["Step 3 · Play","Tap to play. Say \"stop\" any time."]};
+  $("stepTitle").textContent = titles[step][0]; $("stepSub").textContent = titles[step][1];
+
+  const h = $("hint"); h.textContent = S.cal ? S.hint : ""; h.classList.toggle("show", !!(S.cal && S.hint));
+  const ws = S.warnings.filter(Boolean);
+  $("warnBox").hidden = !ws.length;
+  $("warns").innerHTML = ws.map(w => `<li>${esc(String(w))}</li>`).join("");
+  if(lastRaw) $("raw").textContent = JSON.stringify(lastRaw, null, 1);
+
+  // spoken updates on changes
+  if(prev.cal === true && S.cal === false) say("Calibrated. Ready to play.");
+  if(prev.live === true && !S.live) say("Lost connection to the piano app.");
+  if(prev.mode && S.mode && prev.mode !== S.mode) say("Mode: " + (mi ? mi[0] : S.mode));
+  if(prev.song && S.song && prev.song !== S.song) say("Song: " + S.song);
+  if(prev.pico === true && S.pico === false) say("Piano disconnected.");
+  if(prev.hint !== S.hint && S.cal && S.hint) say(S.hint, true);
+  prev = {cal:S.cal, live:S.live, mode:S.mode, song:S.song, pico:S.pico, hint:S.hint};
+}
+function cleanStatus(s){ return (s||"").replace(/^Calibrating\s*-\s*/i,"").replace(/\(\w+ moved [^)]*\)/g,"").replace(/[A-Z]_(FOOT|HAND)/g, m => (m[0]==="L"?"left ":"right ")+m.slice(2).toLowerCase()).trim().replace(/^./, c => c.toUpperCase()); }
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- controls ---------- */
+document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => action(b.dataset.act));
+document.addEventListener("keydown", e => {
+  if(e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if(k >= "1" && k <= "8"){ tapKey(+k - 1); }
+  else if(k === "m") action("MODE");
+  else if(k === "s") action("SONG");
+  else if(k === "r") action("RECAL");
+  else if(k === "escape") action("STOP");
+  else if(k === "v") toggleVoice();
+  else return;
+  e.preventDefault();
+});
+$("video").onerror = () => { $("stage").classList.add("dead"); setTimeout(() => { if(S.running) $("video").src = "/video?" + Date.now(); }, 3000); };
+$("video").onload = () => $("stage").classList.remove("dead");
+function noteIndex(name){ const i = NOTES.indexOf(String(name).trim().toUpperCase()[0]); return i < 0 ? null : i; }
+let actx = null;
+const FREQ = [261.63,293.66,329.63,349.23,392.00,440.00,493.88,523.25];
+function beep(k){
+  try{
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if(actx.state === "suspended") actx.resume();
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = "triangle"; o.frequency.value = FREQ[k];
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.65);
+  }catch(e){}
+}
+$("copyRaw").onclick = () => { navigator.clipboard.writeText($("raw").textContent).then(() => toast("Copied")); };
+
+let toastT;
+function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 3200); }
+
+/* ---------- speech out ---------- */
+let speaking = false, lastSaid = "", lastSaidAt = 0;
+function say(text, quiet){
+  $("sr").textContent = text;
+  if(!$("speakBack").checked || !window.speechSynthesis) return;
+  if(quiet && !voiceOn) return;
+  if(text === lastSaid && Date.now() - lastSaidAt < 4000) return;
+  lastSaid = text; lastSaidAt = Date.now();
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text); u.rate = 1.05;
+  u.onstart = () => speaking = true; u.onend = u.onerror = () => setTimeout(() => speaking = false, 300);
+  speechSynthesis.speak(u);
+}
+
+/* ---------- voice commands ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, voiceOn = false;
+const NOTE_WORDS = {c:0,see:0,sea:0,si:0,d:1,dee:1,e:2,ee:2,f:3,eff:3,g:4,gee:4,jee:4,a:5,ay:5,eh:5,b:6,bee:6,be:6,
+  do:0,doe:0,re:1,ray:1,mi:2,me:2,fa:3,far:3,sol:4,so:4,sew:4,la:5,ti:6,tea:6,tee:6};
+const NUM_WORDS = {one:1,won:1,two:2,to:2,too:2,three:3,four:4,for:4,five:5,six:6,seven:7,eight:8,ate:8};
+const COMMANDS = [
+  {say:"help", re:/\b(help|what can i say|commands)\b/, run(){ const l = "You can say: calibrate, stop, next mode, next song, two feet, one foot, play C, more sensitive, status."; did("Help"); say(l); }},
+  {say:"stop listening", re:/\b(stop listening|voice off|mic off|mute mic)\b/, run(){ did("Voice off"); say("Voice off."); setTimeout(()=>toggleVoice(false), 900); }},
+  {say:"stop", re:/\b(stop|silence|quiet|pause|freeze)\b/, run(){ action("STOP"); did("Stopped all keys"); }},
+  {say:"calibrate", re:/\b(re ?calibrate|calibrate|calibration|reset|start over)\b/, run(){ action("RECAL"); did("Recalibrating"); say("Hold still."); }},
+  {say:"free mode", re:/\b(free|guided|guide|chord|chords|split) mode\b|\bmode (free|guided|chords?|split)\b/, run(t){
+    const w = (t.match(/free|guide|chord|split/)||[])[0]; const target = {free:"FREE",guide:"GUIDED",chord:"CHORD",split:"SPLIT"}[w];
+    did("Switching to " + MODE_INFO[target][0]); cycleModeTo(target); }},
+  {say:"next mode", re:/\b(next|change|switch|other) mode\b|^mode$/, run(){ action("MODE"); did("Next mode"); }},
+  {say:"next song", re:/\b(next|change|another|new|play a?) ?song\b|^song$/, run(){ action("SONG"); did("Next song"); }},
+  {say:"two feet", re:/\b(two|both|2) (feet|foot)\b/, run(){ chooseProfile("two_feet", true); }},
+  {say:"one foot", re:/\b(one|single|1) (foot|feet)\b/, run(){ chooseProfile("one_foot", true); }},
+  {say:"left hand and right foot", re:/\bleft hand\b.*\bfoot\b|\bmirror\b/, run(){ chooseProfile("hand_foot_mirror", true); }},
+  {say:"hand and foot", re:/\bhand (and|&|plus) (a )?foot\b|\bright hand\b.*\bfoot\b/, run(){ chooseProfile("hand_foot", true); }},
+  {say:"two hands", re:/\b(two|both|2) hands?\b/, run(){ chooseProfile("two_hands", true); }},
+  {say:"one hand", re:/\b(one|single|1) hand\b|\bfingers\b/, run(){ chooseProfile("one_hand_fingers", true); }},
+  {say:"more sensitive", re:/\b(more sensitive|easier|smaller taps|increase sensitivity)\b/, run(){ nudge("sensitivity", +0.25, 0.5, 3, "More sensitive"); }},
+  {say:"less sensitive", re:/\b(less sensitive|harder|bigger taps|decrease sensitivity)\b/, run(){ nudge("sensitivity", -0.25, 0.5, 3, "Less sensitive"); }},
+  {say:"bigger zones", re:/\b(bigger|larger|wider) (zones?|keys)\b/, run(){ nudge("zone_width", +0.02, 0.06, 0.2, "Bigger zones"); }},
+  {say:"smaller zones", re:/\b(smaller|narrower|tighter) (zones?|keys)\b/, run(){ nudge("zone_width", -0.02, 0.06, 0.2, "Smaller zones"); }},
+  {say:"status", re:/\b(status|what'?s happening|where am i|what mode)\b/, run(){ did("Status"); say(statusSentence()); }},
+  {say:"play C", re:/\b(play|press|hit|tap|test)\b/, run(t){
+    const k = parseKey(t); if(k === null){ did("Which key? Try \"play E\"", true); return; }
+    tapKey(k); did("Played " + (k===7 ? "high C" : NOTES[k])); }},
+];
+function parseKey(t){
+  if(/\b(high|top|upper) (c|see|sea)\b/.test(t)) return 7;
+  if(/\b(low|bottom) (c|see|sea)\b/.test(t)) return 0;
+  const after = t.split(/\b(?:play|press|hit|tap|test)\b/).pop().replace(/\b(the|a|key|note|number)\b/g," ").trim();
+  for(const w of after.split(/\s+/)){
+    if(/^[1-8]$/.test(w)) return +w - 1;
+    if(w in NUM_WORDS) return NUM_WORDS[w] - 1;
+    if(w in NOTE_WORDS) return NOTE_WORDS[w];
+  }
+  return null;
+}
+function nudge(k, d, lo, hi, label){
+  const v = Math.round(Math.min(hi, Math.max(lo, settings[k] + d)) * 100) / 100;
+  changeSetting(k, v); did(label); say(label + ". Hold still to recalibrate.");
+}
+async function cycleModeTo(target){
+  for(let i = 0; i < 4 && S.mode !== target; i++){ await action("MODE"); await new Promise(r => setTimeout(r, 350)); }
+  if(S.mode !== target) did("That mode isn't available for this setup", true);
+}
+function statusSentence(){
+  if(!S.live) return "Not connected to the piano app.";
+  const parts = [];
+  parts.push(S.cal ? "Calibrating, hold still." : "Ready.");
+  if(S.mode) parts.push("Mode " + (MODE_INFO[S.mode] ? MODE_INFO[S.mode][0] : S.mode) + ".");
+  parts.push(S.pico ? "Piano connected." : "Piano not connected.");
+  if(S.cal && S.hint) parts.push(S.hint);
+  return parts.join(" ");
+}
+function did(text, err){ const d = $("did"); d.textContent = text; d.className = "did" + (err ? " err" : ""); }
+function handle(transcript){
+  const t = transcript.toLowerCase().replace(/[.,!?]/g,"").replace(/^(hey |ok |okay )?(piano|keys)\s*/,"").replace(/\bplease\b/g,"").trim();
+  if(!t) return;
+  for(const c of COMMANDS) if(c.re.test(t)){ c.run(t); return; }
+  did(`Didn't catch a command in "${transcript}". Say "help".`, true);
+}
+$("cmds").innerHTML = ["help","calibrate","stop","next mode","next song","two feet","play E","more sensitive","status"].map(c => `<span>"${c}"</span>`).join("");
+
+function toggleVoice(force){
+  const on = force === undefined ? !voiceOn : force;
+  if(on && !SR){ toast("Voice needs Chrome or Safari"); did("This browser has no speech recognition. Use Chrome.", true); return; }
+  voiceOn = on;
+  $("micBtn").setAttribute("aria-pressed", String(on)); $("micLabel").textContent = on ? "Listening" : "Voice off";
+  if(on){ startRec(); $("heard").innerHTML = "<em>Listening… say \"help\".</em>"; }
+  else if(rec){ try{ rec.stop(); }catch(e){} }
+  store.set("voice", on);
+}
+function startRec(){
+  rec = new SR(); rec.lang = "en-US"; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i], txt = r[0].transcript.trim();
+      if(speaking) continue;                       // don't react to our own voice
+      $("heard").textContent = txt;
+      if(r.isFinal) handle(txt);
+    }
+  };
+  rec.onerror = e => {
+    if(e.error === "not-allowed" || e.error === "service-not-allowed"){ toggleVoice(false); did("Microphone blocked. Allow mic access in the address bar.", true); }
+    else if(e.error === "network"){ did("Voice needs an internet connection in Chrome.", true); }
+  };
+  rec.onend = () => { if(voiceOn) setTimeout(() => { try{ rec.start(); }catch(e){} }, 250); };
+  try{ rec.start(); }catch(e){}
+}
+$("micBtn").onclick = () => toggleVoice();
+
+/* ---------- go ---------- */
+syncSettingsUI();
+loadPresets();
+connect();
+render();
+if(store.get("voice", false) && SR) toggleVoice(true);
 </script>
 </body>
 </html>

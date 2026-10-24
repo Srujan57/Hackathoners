@@ -452,7 +452,7 @@ class Rig:
         for e in self.effs.values():
             e.learner = self.learner
         self.warnings = []
-        self.stacked, self._lane_order = False, []
+        self.stacked, self.mat, self._lane_order = False, False, []
         self.setup_hint = ""
         self.recalibrate()
 
@@ -487,22 +487,53 @@ class Rig:
         return events
 
     def _fit_lanes(self):
-        """Place each lane so the resting position is the CENTRE of one zone (a tap in place always plays
-        the same note), with more zones on the outward side.
+        """Place the zone lanes on the floor.
 
-        Zones keep the width the profile asks for even when the two lanes overlap: every foot/hand is tracked
-        on its own, so a left-foot zone and a right-foot zone sharing floor space cannot be confused. (An
-        earlier version shrank zones to keep lanes apart, which made them far too narrow for feet that stand
-        a normal distance apart.) Overlapping lanes are drawn in separate rows so they stay readable."""
+        Default ("mat" layout): lanes that would overlap are laid side by side as ONE continuous keyboard,
+        like a piano mat - the left foot's zones on the left, the right foot's on the right, split halfway
+        between where the feet stood. Zones keep the width the profile asks for (they are only narrowed if
+        the whole keyboard would not fit in the picture). Each foot's resting zone is whichever zone it stood
+        in, so tapping in place always plays the same note.
+
+        Lanes that are far enough apart already keep the old placement (resting position = centre of a zone,
+        more zones on the outward side). profile.meta["lanes"] = "stacked" restores the previous behaviour
+        for overlapping lanes: full-size overlapping lanes drawn in separate rows."""
         lanes = sorted((e for e in self.effs.values() if isinstance(e, TapEffector)),
                        key=lambda e: e.rest_x)
         w = max(self.profile.zone_width * self.aspect, MIN_ZONE_W)
+
+        def place(e, left, home):
+            e.zones = AdaptiveZoneMap(left + e.n * w / 2.0, e.n, w, rest_x=e.rest_x, home=home,
+                                      state=self.learner.zones(e.id))
+
+        lefts = []
         for e in lanes:
             left = e.rest_x - (e.home + 0.5) * w
-            left = min(max(left, 0.0), max(self.aspect - e.n * w, 0.0))
-            e.zones = AdaptiveZoneMap(left + e.n * w / 2.0, e.n, w, rest_x=e.rest_x, home=e.home,
-                                      state=self.learner.zones(e.id))
-        self.stacked = any(a.zones.left + a.n * w > b.zones.left + 1e-9 for a, b in zip(lanes, lanes[1:]))
+            lefts.append(min(max(left, 0.0), max(self.aspect - e.n * w, 0.0)))
+        overlap = any(la + a.n * w > lb + 1e-9 for (a, la), lb in zip(zip(lanes, lefts), lefts[1:]))
+        mat = overlap and self.profile.meta.get("lanes", "mat") != "stacked"
+        if mat:
+            total_n = sum(e.n for e in lanes)
+            w = max(min(w, self.aspect / total_n), MIN_ZONE_W)
+            cum, offs = 0, []
+            for e in lanes:
+                offs.append(cum)
+                cum += e.n
+            # boundary between neighbours i and i+1 should sit halfway between their resting positions
+            wants = [(a.rest_x + b.rest_x) / 2.0 - offs[i + 1] * w for i, (a, b) in enumerate(zip(lanes, lanes[1:]))]
+            start = sum(wants) / len(wants)
+            start = min(max(start, 0.0), max(self.aspect - total_n * w, 0.0))
+            for e, off in zip(lanes, offs):
+                left = start + off * w
+                home = int(min(max((e.rest_x - left) // w, 0), e.n - 1))
+                e.mat_home = home
+                place(e, left, home)
+        else:
+            for e, left in zip(lanes, lefts):
+                place(e, left, e.home)
+        self.mat = mat
+        self.stacked = (not mat) and any(a.zones.left + a.n * w > b.zones.left + 1e-9
+                                         for a, b in zip(lanes, lanes[1:]))
         self._lane_order = [e.id for e in lanes]
         for e in self.effs.values():
             self.warnings += e.warnings

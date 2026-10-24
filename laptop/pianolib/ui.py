@@ -48,23 +48,9 @@ class DwellMenu:
 def draw(frame, cv2, rig, player, link, menu, fps, lat_ms, hud_extra=()):
     """Draws onto an already-mirrored frame. Coordinates from the rig are frame-height units."""
     H, W = frame.shape[:2]
-    overlay = frame.copy()
 
     # zone bands for foot / hand-pad lanes (placeholders until calibration has placed them, so hide them)
-    zones = [] if rig.calibrating else rig.zone_rects()
-    rows = {} if rig.calibrating else rig.lane_rows()
-    for eid, slot, x0, x1 in zones:
-        held = (eid, slot) in player.active
-        color = (60, 200, 90) if held else ((70, 70, 70) if slot % 2 else (110, 110, 110))
-        ry0, ry1 = rows[eid]
-        cv2.rectangle(overlay, (int(x0 * H), int(H * ry0)), (int(x1 * H), int(H * ry1)), color, -1)
-    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
-    for eid, slot, x0, x1 in zones:
-        label = player.label_for((eid, slot))
-        cx = int((x0 + x1) / 2 * H)
-        ry0, ry1 = rows[eid]
-        cv2.rectangle(frame, (int(x0 * H), int(H * ry0)), (int(x1 * H), int(H * ry1)), (200, 200, 200), 1)
-        cv2.putText(frame, label, (cx - 14, int(H * ry1) - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    _draw_zones(frame, cv2, rig, player, H, W)
 
     # finger chips (one per finger, bottom-right)
     y = int(H * 0.70)
@@ -126,3 +112,81 @@ def draw(frame, cv2, rig, player, link, menu, fps, lat_ms, hud_extra=()):
         y0 = int(H * MENU_H) + 28 + 26 * i
         cv2.putText(frame, t, (12, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
         cv2.putText(frame, t, (12, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+
+LANE_COLORS = {"L": (200, 140, 40), "R": (40, 150, 230)}      # BGR: left = blue, right = orange
+LANE_NAMES = {"L_FOOT": "LEFT FOOT", "R_FOOT": "RIGHT FOOT", "L_HAND": "LEFT HAND", "R_HAND": "RIGHT HAND"}
+
+
+def _text(frame, cv2, s, org, scale, color=(255, 255, 255), thick=2, center=False):
+    font = cv2.FONT_HERSHEY_DUPLEX
+    (tw, th), _ = cv2.getTextSize(s, font, scale, thick)
+    x, y = org
+    if center:
+        x -= tw // 2
+        y += th // 2
+    cv2.putText(frame, s, (x, y), font, scale, (0, 0, 0), thick + 4, cv2.LINE_AA)
+    cv2.putText(frame, s, (x, y), font, scale, color, thick, cv2.LINE_AA)
+
+
+def _draw_zones(frame, cv2, rig, player, H, W):
+    """One clear piano-mat row along the floor: every zone shows its note in big letters, tinted by which
+    foot/hand plays it. The zone a foot is over right now gets a white frame; a zone being played lights up
+    green. Overlapping lanes (only with profile.meta["lanes"] = "stacked") are drawn in separate rows."""
+    if rig.calibrating:
+        return
+    zones = rig.zone_rects()
+    if not zones:
+        return
+    rows = rig.lane_rows()
+    k = H / 720.0
+    over = {}                                            # effector -> zone its anchor is above now
+    for eid, e in rig.effs.items():
+        a = e.anchor
+        if a is not None and hasattr(e, "zones") and getattr(e, "calibrated", False):
+            over[eid] = e.zones.zone_for(a[0])
+    px = lambda v: int(round(v * H))
+
+    overlay = frame.copy()
+    for eid, slot, x0, x1 in zones:
+        ry0, ry1 = rows[eid]
+        held = (eid, slot) in player.active
+        base = LANE_COLORS.get(eid[0], (120, 120, 120))
+        shade = 1.0 if slot % 2 == 0 else 0.72
+        color = (60, 210, 90) if held else tuple(int(c * shade) for c in base)
+        cv2.rectangle(overlay, (px(x0), px(ry0)), (px(x1), px(ry1)), color, -1)
+    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+
+    lane_span = {}
+    for eid, slot, x0, x1 in zones:
+        ry0, ry1 = rows[eid]
+        held = (eid, slot) in player.active
+        p0, p1 = (px(x0), px(ry0)), (px(x1), px(ry1))
+        cv2.rectangle(frame, p0, p1, (235, 235, 235), max(1, int(1.5 * k)))
+        if over.get(eid) == slot and not held:
+            cv2.rectangle(frame, (p0[0] + int(3 * k), p0[1] + int(3 * k)), (p1[0] - int(3 * k), p1[1] - int(3 * k)),
+                          (255, 255, 255), max(2, int(5 * k)))
+        label = str(player.label_for((eid, slot)))
+        big = 1.9 if len(label) <= 2 else 1.25
+        if len(rows) and len(set(rows.values())) > 1:
+            big *= 0.7
+        _text(frame, cv2, label, ((p0[0] + p1[0]) // 2, (p0[1] + p1[1]) // 2 + int(8 * k)), big * k,
+              (20, 20, 20) if held else (255, 255, 255), max(2, int(3 * k)), center=True)
+        lo, hi = lane_span.get(eid, (p0[0], p1[0]))
+        lane_span[eid] = (min(lo, p0[0]), max(hi, p1[0]))
+
+    for eid, (lo, hi) in lane_span.items():
+        ry0 = px(rows[eid][0])
+        name = LANE_NAMES.get(eid, eid)
+        (tw, th), _ = cv2.getTextSize(name, cv2.FONT_HERSHEY_DUPLEX, 0.7 * k, max(1, int(2 * k)))
+        cx = (lo + hi) // 2
+        y1 = ry0 - int(6 * k)
+        cv2.rectangle(frame, (cx - tw // 2 - int(10 * k), y1 - th - int(14 * k)), (cx + tw // 2 + int(10 * k), y1),
+                      LANE_COLORS.get(eid[0], (90, 90, 90)), -1)
+        cv2.putText(frame, name, (cx - tw // 2, y1 - int(7 * k)), cv2.FONT_HERSHEY_DUPLEX, 0.7 * k,
+                    (255, 255, 255), max(1, int(2 * k)), cv2.LINE_AA)
+    if getattr(rig, "mat", False):                       # thick divider where one foot's keys end
+        ids = [i for i in rig._lane_order if i in lane_span]
+        for a, b in zip(ids, ids[1:]):
+            x = (lane_span[a][1] + lane_span[b][0]) // 2
+            cv2.line(frame, (x, px(rows[a][0]) - int(34 * k)), (x, H), (255, 255, 255), max(2, int(4 * k)))

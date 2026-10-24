@@ -274,14 +274,36 @@ class TestRig:
         self.run(rig, sc, 3)
         assert not rig.calibrating and rig.status() == ""
 
-    def test_zones_keep_their_width_when_feet_are_close_and_lanes_are_stacked(self):
-        rig, sc = self.make(lx=0.80, rx=1.00)                  # feet 0.2 apart: lanes overlap
+    def test_close_feet_get_one_row_keyboard_with_full_width_zones(self):
+        rig, sc = self.make(lx=0.80, rx=1.00)                  # feet 0.2 apart: lanes would overlap
         self.run(rig, sc, 3)
-        widths = {round(e.zones.width, 6) for e in rig.effs.values()}
-        assert widths == {round(PRESETS["two_feet"].zone_width * rig.aspect, 6)}
-        assert rig.stacked
+        w = PRESETS["two_feet"].zone_width * rig.aspect
+        assert {round(e.zones.width, 6) for e in rig.effs.values()} == {round(w, 6)}
+        assert rig.mat and not rig.stacked
+        assert len(set(rig.lane_rows().values())) == 1        # drawn as one row
+        L, R = rig.effs["L_FOOT"].zones, rig.effs["R_FOOT"].zones
+        assert abs((L.left + L.n * L.width) - R.left) < 1e-9   # side by side, no overlap, no gap
+        assert L.left <= 0.80 <= L.left + L.n * L.width        # each foot stands inside its own lane
+        assert R.left <= 1.00 <= R.left + R.n * R.width
+
+    def test_stacked_layout_still_available(self):
+        from pianolib.profile import InputProfile
+        p = InputProfile.from_dict(dict(PRESETS["two_feet"].to_dict(), meta={"lanes": "stacked"}))
+        _, sc = self.make(lx=0.80, rx=1.00)
+        rig = Rig(p, aspect=W / float(H))
+        self.run(rig, sc, 3)
+        assert rig.stacked and not rig.mat
         rows = rig.lane_rows()
-        assert rows["L_FOOT"][1] <= rows["R_FOOT"][0] + 1e-9     # drawn in separate rows
+        assert rows["L_FOOT"][1] <= rows["R_FOOT"][0] + 1e-9
+
+    def test_close_feet_tapping_in_place_plays_the_zone_under_each_foot(self):
+        rig, sc = self.make(lx=0.80, rx=1.00, ltaps=taps(3.0, 0.7, 8, 0.05), rtaps=taps(3.3, 0.7, 8, 0.05))
+        ev = self.run(rig, sc, 9.5)
+        assert rig.mat
+        for eid, x in (("L_FOOT", 0.80), ("R_FOOT", 1.00)):
+            zs = [z for _, e, z, k in ev if e == eid and k == "down"]
+            assert len(zs) >= 7, (eid, zs)
+            assert set(zs) == {rig.effs[eid].zones.zone_for(x)}, (eid, zs)
 
     def test_far_apart_feet_share_one_row(self):
         rig, sc = self.make(lx=0.35, rx=1.45)
