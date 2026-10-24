@@ -256,10 +256,13 @@ def two_feet_frame(t, scripts):
 
 
 class TestRig:
-    def make(self, lx=0.55, rx=1.25, ltaps=(), rtaps=(), **kw):
+    def make(self, lx=0.55, rx=1.25, ltaps=(), rtaps=(), lanes=None, **kw):
         scripts = (sim.FootScript(x0=lx, taps=list(ltaps), seed=5, **kw),
                    sim.FootScript(x0=rx, taps=list(rtaps), seed=6, **kw))
-        rig = Rig(PRESETS["two_feet"], aspect=W / float(H))
+        prof = PRESETS["two_feet"]
+        if lanes:
+            prof = InputProfile.from_dict(dict(prof.to_dict(), meta={"lanes": lanes}))
+        rig = Rig(prof, aspect=W / float(H))
         return rig, scripts
 
     def run(self, rig, scripts, dur):
@@ -274,37 +277,53 @@ class TestRig:
         self.run(rig, sc, 3)
         assert not rig.calibrating and rig.status() == ""
 
-    def test_close_feet_get_one_row_keyboard_with_full_width_zones(self):
-        rig, sc = self.make(lx=0.80, rx=1.00)                  # feet 0.2 apart: lanes would overlap
+    def test_default_layout_is_a_fixed_keyboard_in_the_middle_of_the_screen(self):
+        w = PRESETS["two_feet"].zone_width * (W / float(H))
+        starts = []
+        for lx, rx in ((0.55, 1.25), (0.62, 1.18), (0.80, 1.00)):
+            rig, sc = self.make(lx=lx, rx=rx)
+            self.run(rig, sc, 3)
+            assert rig.layout == "screen" and not rig.stacked
+            assert len(set(rig.lane_rows().values())) == 1                     # one row
+            L, R = rig.effs["L_FOOT"].zones, rig.effs["R_FOOT"].zones
+            assert {round(L.width, 6), round(R.width, 6)} == {round(w, 6)}
+            assert abs((L.left + L.n * L.width) - R.left) < 1e-9               # side by side, no gap
+            centre = (rig.aspect - 8 * w) / 2.0
+            assert abs(L.left - centre) <= w / 2.0 + 1e-9                      # centred, moved <= half a zone
+            starts.append(L.left)
+        assert max(starts) - min(starts) <= w + 1e-9                           # same sections every session
+
+    def test_screen_layout_starts_each_foot_in_the_middle_of_a_zone(self):
+        for lx, rx in ((0.55, 1.25), (0.80, 1.00), (0.70, 1.10)):
+            rig, sc = self.make(lx=lx, rx=rx)
+            self.run(rig, sc, 3)
+            for eid in ("L_FOOT", "R_FOOT"):
+                e = rig.effs[eid]
+                u = (e.rest_x - e.zones.left) / e.zones.width
+                assert 0 <= u <= e.n
+                assert 0.15 <= u - int(u) <= 0.85, (lx, rx, eid, u)            # never standing on a line
+
+    def test_screen_layout_tapping_in_place_plays_the_zone_under_each_foot(self):
+        rig, sc = self.make(lx=0.80, rx=1.00, ltaps=taps(3.0, 0.7, 8, 0.05), rtaps=taps(3.3, 0.7, 8, 0.05))
+        ev = self.run(rig, sc, 9.5)
+        for eid, x in (("L_FOOT", 0.80), ("R_FOOT", 1.00)):
+            zs = [z for _, e, z, k in ev if e == eid and k == "down"]
+            assert len(zs) >= 7, (eid, zs)
+            assert len(set(zs)) == 1, (eid, zs)
+
+    def test_mat_layout_puts_close_feet_in_one_row(self):
+        rig, sc = self.make(lx=0.80, rx=1.00, lanes="mat")
         self.run(rig, sc, 3)
-        w = PRESETS["two_feet"].zone_width * rig.aspect
-        assert {round(e.zones.width, 6) for e in rig.effs.values()} == {round(w, 6)}
         assert rig.mat and not rig.stacked
-        assert len(set(rig.lane_rows().values())) == 1        # drawn as one row
         L, R = rig.effs["L_FOOT"].zones, rig.effs["R_FOOT"].zones
-        assert abs((L.left + L.n * L.width) - R.left) < 1e-9   # side by side, no overlap, no gap
-        assert L.left <= 0.80 <= L.left + L.n * L.width        # each foot stands inside its own lane
-        assert R.left <= 1.00 <= R.left + R.n * R.width
+        assert abs((L.left + L.n * L.width) - R.left) < 1e-9
 
     def test_stacked_layout_still_available(self):
-        from pianolib.profile import InputProfile
-        p = InputProfile.from_dict(dict(PRESETS["two_feet"].to_dict(), meta={"lanes": "stacked"}))
-        _, sc = self.make(lx=0.80, rx=1.00)
-        rig = Rig(p, aspect=W / float(H))
+        rig, sc = self.make(lx=0.80, rx=1.00, lanes="stacked")
         self.run(rig, sc, 3)
         assert rig.stacked and not rig.mat
         rows = rig.lane_rows()
         assert rows["L_FOOT"][1] <= rows["R_FOOT"][0] + 1e-9
-
-    def test_close_feet_tapping_in_place_plays_the_zone_under_each_foot(self):
-        rig, sc = self.make(lx=0.80, rx=1.00, ltaps=taps(3.0, 0.7, 8, 0.05), rtaps=taps(3.3, 0.7, 8, 0.05))
-        ev = self.run(rig, sc, 9.5)
-        assert rig.mat
-        for eid, x in (("L_FOOT", 0.80), ("R_FOOT", 1.00)):
-            zs = [z for _, e, z, k in ev if e == eid and k == "down"]
-            assert len(zs) >= 7, (eid, zs)
-            assert set(zs) == {rig.effs[eid].zones.zone_for(x)}, (eid, zs)
-
     def test_far_apart_feet_share_one_row(self):
         rig, sc = self.make(lx=0.35, rx=1.45)
         self.run(rig, sc, 3)
@@ -312,13 +331,13 @@ class TestRig:
         assert len(set(rig.lane_rows().values())) == 1
 
     def test_tapping_in_place_always_plays_the_same_zone(self):
-        rig, sc = self.make(ltaps=taps(3.0, 0.7, 10, 0.05), rtaps=taps(3.3, 0.7, 10, 0.05))
+        rig, sc = self.make(ltaps=taps(3.0, 0.7, 10, 0.05), rtaps=taps(3.3, 0.7, 10, 0.05), lanes="mat")
         ev = [e for e in self.run(rig, sc, 12) if e[3] == "down"]
         assert {e[2] for e in ev if e[1] == "L_FOOT"} == {2}      # left foot: home zone is 2 of 0-3
         assert {e[2] for e in ev if e[1] == "R_FOOT"} == {1}      # right foot: home zone is 1 of 0-3
 
     def test_resting_position_is_the_centre_of_a_zone(self):
-        rig, sc = self.make()
+        rig, sc = self.make(lanes="mat")
         self.run(rig, sc, 3)
         for eid, home in (("L_FOOT", 2), ("R_FOOT", 1)):
             e = rig.effs[eid]

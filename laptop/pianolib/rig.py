@@ -23,11 +23,17 @@ CAL_MIN_S = 0.8        # calibration needs this long of stillness
 CAL_WINDOW_S = 1.2
 CAL_MOVE = 0.025       # max wobble (frame heights) allowed during calibration
 OFF_S = 0.6            # still but far from the baseline this long -> the baseline is wrong, relearn
+OFF_LIFTED_S = 2.0     # ...but mid-lift (foot held up at the top of a tap) wait this long, so held lifts still play
+SLIDE_V = 0.35         # a foot moving sideways faster than this (frame heights / s) is sliding to a new key
+CROSS_S = 0.5          # while one foot slides and this long after, the OTHER foot's taps must be...
+V_REAL_LIFT = 1.2      # a lift that started faster than this (reference lengths / s) is a real tap, not drift
+CROSS_K = 2.0          # ...at least this many times its normal lift threshold (weight shift twitches are not notes)
 NEAR_GATE = False      # (tested both ways: ungated tracks drift best; see tests/bench_vs_legacy.py)
 V_LEARN = 0.35         # ...learn only while moving slower than this (reference lengths / s)
 V_RISING = 0.8         # ...and not rising faster than this
 MIN_REF = 0.04         # smallest allowed reference length (frame heights)
 MIN_ZONE_W = 0.03      # narrowest allowed zone (frame heights)
+SCREEN_MARGIN = 0.04   # "screen" layout keeps the keyboard this far from the picture edges (frame heights)
 FINGER_MIN_LEN = 0.25  # finger shorter than this x palm length is too short to track reliably
 
 
@@ -219,6 +225,9 @@ class TapEffector(BaseEffector):
 
     def reset_runtime(self):
         self.det.reset()
+        self.strict_until = -1.0
+        self._real_lift = False
+        self.vx, self._x_prev = 0.0, None
         self.held = None
         self.prev_zone = None
         self.xs = deque(maxlen=4)
@@ -294,7 +303,8 @@ class TapEffector(BaseEffector):
         # wrong (or the player rested the foot up). Re-plant it here instead of staying stuck, and do it
         # silently - a re-plant must never produce a note.
         self._off = self._off + dt if (calm and not near) else 0.0
-        if self._off >= OFF_S:
+        held_up = self.det.state == "LIFTED" and self._real_lift and not self.det.fired   # top of a real tap
+        if self._off >= (OFF_LIFTED_S if held_up else OFF_S):
             for n in names:
                 self.base[n].b = f[n][1]
             self.det.reset()
@@ -309,8 +319,16 @@ class TapEffector(BaseEffector):
             self.xs.append(a_pt[0])
 
         out = []
-        for ev in self.det.update(t, lift):
+        was = self.det.state
+        evs = self.det.update(t, lift)
+        if self.det.state == "LIFTED" and was == "DOWN":
+            self._real_lift = self.det.vel > V_REAL_LIFT         # fast rise = real tap; slow creep = drift
+        elif self.det.state == "DOWN" or self.det.vel < -V_REAL_LIFT:
+            self._real_lift = False                              # landed, or already came down fast
+        for ev in evs:
             if ev == "down":
+                if t < self.strict_until and self.det.peak < CROSS_K * self.det.hi:
+                    continue                             # the other foot is sliding: this was a weight-shift twitch
                 x = median(list(self.xs)) if self.xs else self.rest_x
                 z = self.zones.zone_for(x, self.prev_zone)
                 if hasattr(self.zones, "observe_tap"):
@@ -453,6 +471,7 @@ class Rig:
             e.learner = self.learner
         self.warnings = []
         self.stacked, self.mat, self._lane_order = False, False, []
+        self.layout = profile.meta.get("lanes", "screen")
         self.setup_hint = ""
         self.recalibrate()
 
@@ -476,6 +495,7 @@ class Rig:
                 self._fit_lanes()
                 self.state = "READY"
             return []
+        self._cross_guard(t)
         events = []
         for eid, e in self.effs.items():
             evs = e.update(t, obs.get(eid, {}))
@@ -486,10 +506,31 @@ class Rig:
         self.learner.on_events(t, events, self.warnings)
         return events
 
+    def _cross_guard(self, t):
+        """Shifting weight to slide one foot makes the other foot twitch. While a tap lane slides sideways,
+        every OTHER tap lane needs a clearly bigger lift to play (see CROSS_K)."""
+        taps = [e for e in self.effs.values() if isinstance(e, TapEffector)]
+        if len(taps) < 2:
+            return
+        for e in taps:
+            a = e.anchor
+            if a is None or e._x_prev is None:
+                e._x_prev = (t, a[0]) if a is not None else None
+                continue
+            dt = t - e._x_prev[0]
+            if dt > 0:
+                e.vx = 0.6 * e.vx + 0.4 * (a[0] - e._x_prev[1]) / dt
+            e._x_prev = (t, a[0])
+            if abs(e.vx) > SLIDE_V:
+                for o in taps:
+                    if o is not e:
+                        o.strict_until = t + CROSS_S
+
     def _fit_lanes(self):
         """Place the zone lanes on the floor.
 
-        Default ("mat" layout): lanes that would overlap are laid side by side as ONE continuous keyboard,
+        Default ("screen" layout, profile.meta["lanes"] unset): fixed sections - see below.
+        "mat" layout: lanes that would overlap are laid side by side as ONE continuous keyboard,
         like a piano mat - the left foot's zones on the left, the right foot's on the right, split halfway
         between where the feet stood. Zones keep the width the profile asks for (they are only narrowed if
         the whole keyboard would not fit in the picture). Each foot's resting zone is whichever zone it stood
@@ -506,12 +547,37 @@ class Rig:
             e.zones = AdaptiveZoneMap(left + e.n * w / 2.0, e.n, w, rest_x=e.rest_x, home=home,
                                       state=self.learner.zones(e.id))
 
+        layout = self.profile.meta.get("lanes", "screen")
+        self.layout = layout
+        if layout == "screen" and lanes:
+            # Fixed sections of the picture: one keyboard, centred on the screen, that never moves. Same spot
+            # on the floor = same note, every session. Lanes are side by side in body order (left foot's
+            # notes on the left). Zone width is the profile's, narrowed only if the keyboard would not fit.
+            total_n = sum(e.n for e in lanes)
+            w = max(min(w, (self.aspect - 2 * SCREEN_MARGIN) / total_n), MIN_ZONE_W)
+            start = self._screen_start(lanes, total_n, w)
+            off = 0
+            for e in lanes:
+                left = start + off * w
+                off += e.n
+                # plain (non-adaptive) zones: learning must not move fixed sections
+                e.zones = ZoneMap(left + e.n * w / 2.0, e.n, w)
+                e.mat_home = int(min(max((e.rest_x - left) // w, 0), e.n - 1))
+            self.mat, self.stacked = True, False
+            self._lane_order = [e.id for e in lanes]
+            for e in self.effs.values():
+                self.warnings += e.warnings
+            outside = [e.id for e in lanes if not (e.zones.left <= e.rest_x <= e.zones.left + e.n * w)]
+            if outside:
+                self.warnings.append("stand nearer the middle: %s is outside its keys" % ", ".join(outside))
+            return
+
         lefts = []
         for e in lanes:
             left = e.rest_x - (e.home + 0.5) * w
             lefts.append(min(max(left, 0.0), max(self.aspect - e.n * w, 0.0)))
         overlap = any(la + a.n * w > lb + 1e-9 for (a, la), lb in zip(zip(lanes, lefts), lefts[1:]))
-        mat = overlap and self.profile.meta.get("lanes", "mat") != "stacked"
+        mat = overlap and layout != "stacked"
         if mat:
             total_n = sum(e.n for e in lanes)
             w = max(min(w, self.aspect / total_n), MIN_ZONE_W)
@@ -537,6 +603,29 @@ class Rig:
         self._lane_order = [e.id for e in lanes]
         for e in self.effs.values():
             self.warnings += e.warnings
+
+    def _screen_start(self, lanes, total_n, w):
+        """Left edge of the fixed keyboard: centred on the screen, then slid by at most half a zone so that
+        every foot starts in the MIDDLE of a zone (standing on a line would make tap-in-place flicker
+        between two notes). Fixed for the rest of the session."""
+        centre = (self.aspect - total_n * w) / 2.0
+        lo, hi = 0.0, max(self.aspect - total_n * w, 0.0)
+        best, best_key = centre, None
+        for i in range(-20, 21):
+            start = min(max(centre + i * w / 40.0, lo), hi)
+            score, off = 1.0, 0
+            for e in lanes:
+                u = (e.rest_x - (start + off * w)) / w          # position along this lane, in zones
+                off += e.n
+                if 0.0 <= u <= e.n:
+                    frac = u - math.floor(u)
+                    score = min(score, min(frac, 1.0 - frac))   # 0.5 = dead centre of a zone
+                else:
+                    score = min(score, -min(abs(u), abs(u - e.n)))
+            key = (round(score, 3), -abs(start - centre))
+            if best_key is None or key > best_key:
+                best, best_key = start, key
+        return best
 
     def lane_rows(self):
         """{effector_id: (top, bottom)} as fractions of frame height for drawing the zone bands."""

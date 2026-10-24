@@ -13,7 +13,7 @@ os.environ["PIANO_USERS_DIR"] = _tmp
 
 from pianolib import adapt  # noqa: E402
 adapt.USERS_DIR = _tmp
-from pianolib.profile import PRESETS  # noqa: E402
+from pianolib.profile import PRESETS, InputProfile  # noqa: E402
 from pianolib.rig import Rig  # noqa: E402
 
 FPS = 30.0
@@ -30,8 +30,11 @@ def foot_pts(x, lift_frac, rng, noise):
 
 
 class Sim:
-    def __init__(self, preset="one_foot", user=None, noise=0.0004, seed=0):
-        self.rig = Rig(PRESETS[preset], user=user or "u%d" % random.random().__hash__())
+    def __init__(self, preset="one_foot", user=None, noise=0.0004, seed=0, lanes="mat"):
+        prof = PRESETS[preset]
+        if lanes:   # zone learning (reach / aim) only runs in the feet-anchored layouts; "screen" zones are fixed
+            prof = InputProfile.from_dict(dict(prof.to_dict(), meta={"lanes": lanes}))
+        self.rig = Rig(prof, user=user or "u%d" % random.random().__hash__())
         self.rng = random.Random(seed)
         self.noise = noise
         self.t = 0.0
@@ -246,6 +249,17 @@ def test_fingers_learn_too():
         for _ in range(8):
             rig.update(t, hand(t, 0.0)); t += 1 / FPS
     assert det.hi < hi0 and notes >= 4
+
+
+def test_screen_layout_zones_stay_fixed_while_strength_still_learns():
+    s = Sim(lanes=None)
+    s.calibrate()
+    z0 = (s.zones().left, s.zones().width)
+    hi0 = s.det().hi
+    for i in range(18):
+        s.tap(0.08, x=s.zones().left + (1.5 + (i % 2)) * s.zones().width)
+    assert (s.zones().left, s.zones().width) == z0          # sections never move
+    assert s.det().hi < hi0                                 # but weak taps are still learned
 
 
 def test_unpatched_rig_still_works_without_learner():
