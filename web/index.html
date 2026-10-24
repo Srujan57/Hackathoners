@@ -129,7 +129,7 @@ details[open] summary{margin-bottom:12px}
       <label><span>Note length <b id="vLen"></b></span><input type="range" id="len" min="0.05" max="1.5" step="0.05"></label>
       <label><span>Lane width <b id="vZone"></b></span><input type="range" id="zone" min="0.03" max="0.3" step="0.01"></label>
       <div class="check"><input type="checkbox" id="sustain"><label for="sustain" style="margin:0">Hold the note while the body part is held</label></div>
-      <div class="check"><input type="checkbox" id="sound"><label for="sound" style="margin:0">Preview sound in browser</label></div>
+      <div class="check"><input type="checkbox" id="sound"><label for="sound" style="margin:0">Play sound in this browser (when the laptop isn’t)</label></div>
       <button id="btnApply" disabled>Apply changes</button>
       <p class="hint">Applying changes restarts calibration.</p>
     </div>
@@ -271,13 +271,13 @@ function onState(s) {
   if (!started && s.profile) { started = true; $('video').src = '/video'; $('cta').hidden = true; }
   if (s.error && !s.profile) { $('cta').hidden = false; $('ctaText').textContent = s.error; chip('chipTrack', false, 'Tracking stopped'); return; }
   chip('chipTrack', !s.calibrating, s.calibrating ? 'Calibrating' : 'Tracking');
-  chip('chipPico', s.pico && !s.link_error, !s.pico ? 'No piano (test mode)' : s.link_error ? 'Piano link problem' : 'Piano connected');
+  chip('chipPico', s.pico && !s.link_error, !s.pico ? (s.sound ? 'No piano (laptop sound)' : 'No piano (test mode)') : s.link_error ? 'Piano link problem' : 'Piano connected');
   chip('chipFps', s.fps > 8, `${s.fps} fps`);
   $('btnMode').textContent = 'Mode: ' + s.mode;
   $('modeHint').textContent = s.mode === 'GUIDED' ? `Song: ${s.song}. Next note: ${s.next}.` : { FREE: 'Each lane or finger plays its own note.', CHORD: 'Each lane or finger plays a chord.', SPLIT: 'One body part plays chords, the rest play the melody.' }[s.mode] || '';
   banner(s.error || (s.link_error ? 'Piano link problem: ' + s.link_error : s.calibrating ? s.status : s.warnings?.[0]), !!(s.error || s.link_error));
   keyEls.forEach((k, i) => k.classList.toggle('on', s.held.includes(i)));
-  s.held.filter(k => !prevHeld.includes(k)).forEach(k => { log(NOTES[k] + ' pressed'); if (S.sound) beep(k); });
+  s.held.filter(k => !prevHeld.includes(k)).forEach(k => { log(NOTES[k] + ' pressed'); if (S.sound && !s.sound) beep(k); });
   prevHeld = s.held;
 }
 const es = new EventSource('/events');

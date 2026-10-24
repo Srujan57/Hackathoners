@@ -10,7 +10,8 @@ It runs the same camera -> pose -> Pico loop as foot_piano.py, but headless, and
   POST /api/action    {"name": "MODE" | "SONG" | "RECAL" | "STOP"}
   POST /api/key       {"k": 0-7}  test-tap one piano key
 
-Run:   python web_server.py --port COM7          (or --no-pico), then open http://localhost:8000
+Run:   python web_server.py --port COM7 [--sound]   (or --no-pico: laptop speakers play the notes)
+then open http://localhost:8000
 Only listens on 127.0.0.1. The Pico's USB port is held by this process, so close foot_piano.py/Thonny first.
 """
 
@@ -155,14 +156,26 @@ def vision_loop(args, sh):
     def make_backend(need_hands):
         print("[model] loading RTMPose (%s) - the first run downloads the weights..." % args.model_mode)
         return PoseBackend(need_hands, mode=args.model_mode, device=args.device,
-                           refine_hands=not args.no_hand_refine)
+                           refine_hands=not args.no_hand_refine, det_every=args.det_every)
 
     link = PianoLink(None if args.no_pico else args.port)
-    app = App(load_profile(args.profile), link, make_backend, args.width / float(args.height))
-    cam = LatestFrameCamera(args.camera, args.width, args.height)
+    audio = None                                     # same sound setup as foot_piano.py
+    if (args.no_pico or args.sound) and not args.mute:
+        try:
+            from pianolib.audio import AudioOut
+            audio = AudioOut()
+            link.sinks.append(audio)
+            audio.chime()
+            print("[audio] software piano on (%s, %d Hz)" % (audio.device_name, audio.synth.sr))
+        except Exception as e:                       # no sound must not stop the rest
+            print("[audio] could not start sound (%s). Try:  pip install sounddevice" % e)
+
+    app = cam = None
     error, test_release = "", {}
-    last, fps, lat_ms = time.monotonic(), 0.0, 0.0
+    last, fps, lat_ms, last_err = time.monotonic(), 0.0, 0.0, 0.0
     try:
+        app = App(load_profile(args.profile), link, make_backend, args.width / float(args.height))
+        cam = LatestFrameCamera(args.camera, args.width, args.height)
         while not sh.stop.is_set():
             frame, tcap = cam.read(timeout=2.0)
             if frame is None:
@@ -192,7 +205,13 @@ def vision_loop(args, sh):
                     link.release(k)
                     del test_release[k]
 
-            app.process(frame, tcap)
+            try:
+                app.process(frame, tcap)
+            except Exception as e:                   # one bad frame must not end the performance
+                app.player.stop_all()
+                if time.monotonic() - last_err > 2.0:
+                    print("[error] frame skipped:", repr(e))
+                    last_err = time.monotonic()
             H, W = frame.shape[:2]
             btn = app.menu.update(time.monotonic(), app.pointers_px(H), W, H)
             if btn:
@@ -203,7 +222,8 @@ def vision_loop(args, sh):
             last = now
 
             disp = cv2.flip(frame, 1)
-            draw(disp, cv2, app.rig, app.player, link, app.menu, fps, lat_ms)
+            draw(disp, cv2, app.rig, app.player, link, app.menu, fps, lat_ms,
+                 hud_extra=["model %.0f ms/frame" % app.infer_ms])
             if W > 960:
                 disp = cv2.resize(disp, (960, int(H * 960 / W)))
             ok, buf = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, 72])
@@ -213,15 +233,20 @@ def vision_loop(args, sh):
                 "calibrating": app.rig.calibrating, "status": app.rig.status(),
                 "warnings": list(app.rig.warnings[:3]),
                 "held": [k for k in range(NUM_KEYS) if link.held(k)],
-                "pico": link.ser is not None, "link_error": link.error,
+                "pico": link.ser is not None, "sound": audio is not None, "link_error": link.error,
                 "fps": round(fps, 1), "lat": round(lat_ms), "song": SONGS[pl.song][0],
                 "next": pl.next_note_name(), "error": error})
     except Exception as e:
         sh.publish(None, {"error": "Tracking stopped: %s" % e})
         raise
     finally:
+        if app is not None and app.backend is not None and hasattr(app.backend, "close"):
+            app.backend.close()
         link.close()
-        cam.release()
+        if audio is not None:
+            audio.close()
+        if cam is not None:
+            cam.release()
 
 
 def main():
@@ -234,7 +259,10 @@ def main():
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--profile", default="two_feet", help="profile to start with (the UI replaces it)")
-    ap.add_argument("--model-mode", default="balanced", choices=["lightweight", "balanced", "performance"])
+    ap.add_argument("--model-mode", default="lightweight", choices=["lightweight", "balanced", "performance"])
+    ap.add_argument("--det-every", type=int, default=30, help="refresh the person detector every N frames")
+    ap.add_argument("--sound", action="store_true", help="play notes on the laptop speakers (default with --no-pico)")
+    ap.add_argument("--mute", action="store_true", help="never play sound")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--no-hand-refine", action="store_true")
     args = ap.parse_args()
