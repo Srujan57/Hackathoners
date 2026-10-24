@@ -13,6 +13,8 @@ from collections import deque
 from .detect import (BASE_LIFT_HI, NOISE_K, SETTLE_S, V_SETTLE, DriftBaseline, FlexDetector, TapDetector,
                      ZoneMap, detrended_std, median, stdev)
 from .filters import OneEuro
+from .adapt import (AdaptiveFlexDetector, AdaptiveTapDetector, AdaptiveZoneMap, Learner,
+                    zone_bounds)
 
 MIN_SCORE = 0.35       # keypoints below this confidence are ignored
 LOST_GRACE_S = 0.25    # an effector unseen this long releases its notes
@@ -109,6 +111,7 @@ class BaseEffector:
         self._lost_since = None
         self.pts = {}
         self.warnings = []
+        self.learner = None
 
     # ---- helpers ----------------------------------------------------------
     def _filter(self, raw, t):
@@ -242,7 +245,8 @@ class TapEffector(BaseEffector):
             pairs = [(t, f[n][1]) for t, f in self.cal if n in f]
             sigma = max(sigma, detrended_std([t for t, _ in pairs], [y / self.ref for _, y in pairs]))
         hi = max(BASE_LIFT_HI / self.sens, NOISE_K * sigma)
-        self.det = TapDetector(lift_hi=hi)
+        self.det = (AdaptiveTapDetector(lift_hi=hi, noise_sigma=sigma, stats=self.learner.strength(self.id))
+                    if self.learner else TapDetector(lift_hi=hi))
         anchor = next((pos[n] for n in self.ANCHOR if n in pos), None)
         self.rest_x = anchor[0] if anchor else 0.5
         self.sigma = sigma
@@ -309,6 +313,8 @@ class TapEffector(BaseEffector):
             if ev == "down":
                 x = median(list(self.xs)) if self.xs else self.rest_x
                 z = self.zones.zone_for(x, self.prev_zone)
+                if hasattr(self.zones, "observe_tap"):
+                    self.zones.observe_tap(t, x, z)
                 self.prev_zone = z
                 self.held = z
                 out.append((z, "down"))
@@ -388,7 +394,9 @@ class FingerEffector(BaseEffector):
             self.e0[g], self.ok[g] = e0, True
             sigma = stdev([(e0 - l) / e0 for l in lens])
             hi = min(0.7, max(0.35 / self.sens, NOISE_K * sigma))
-            dets[g] = FlexDetector(hi=hi, lo=0.6 * hi)
+            dets[g] = (AdaptiveFlexDetector(hi=hi, lo=0.6 * hi, noise_sigma=sigma,
+                                            stats=self.learner.strength(self.id + "/" + g))
+                       if self.learner else FlexDetector(hi=hi, lo=0.6 * hi))
         self.reset_runtime()
         self.dets.update(dets)
         self.calibrated = True
@@ -436,10 +444,13 @@ def make_effector(spec, sensitivity, min_score=MIN_SCORE):
 class Rig:
     """All of a player's effectors: auto-calibrates, then turns observations into slot events."""
 
-    def __init__(self, profile, aspect=16 / 9.0, min_score=MIN_SCORE):
+    def __init__(self, profile, aspect=16 / 9.0, min_score=MIN_SCORE, user=None):
         self.profile = profile
         self.aspect = aspect
         self.effs = {e.id: make_effector(e, profile.sensitivity, min_score) for e in profile.effectors}
+        self.learner = Learner(user or profile.meta.get("user"))
+        for e in self.effs.values():
+            e.learner = self.learner
         self.warnings = []
         self.stacked, self._lane_order = False, []
         self.setup_hint = ""
@@ -472,6 +483,7 @@ class Rig:
             if menu_y and a is not None and a[1] < menu_y:    # in the menu strip: never play a note
                 evs = [x for x in evs if x[1] != "down"]
             events += [(eid, slot, kind) for slot, kind in evs]
+        self.learner.on_events(t, events, self.warnings)
         return events
 
     def _fit_lanes(self):
@@ -488,7 +500,8 @@ class Rig:
         for e in lanes:
             left = e.rest_x - (e.home + 0.5) * w
             left = min(max(left, 0.0), max(self.aspect - e.n * w, 0.0))
-            e.zones = ZoneMap(left + e.n * w / 2.0, e.n, w)
+            e.zones = AdaptiveZoneMap(left + e.n * w / 2.0, e.n, w, rest_x=e.rest_x, home=e.home,
+                                      state=self.learner.zones(e.id))
         self.stacked = any(a.zones.left + a.n * w > b.zones.left + 1e-9 for a, b in zip(lanes, lanes[1:]))
         self._lane_order = [e.id for e in lanes]
         for e in self.effs.values():
@@ -504,7 +517,7 @@ class Rig:
 
     # ---- queries for the UI / pose association -------------------------------
     def zone_rects(self):
-        return [(e.id, i, e.zones.left + i * e.zones.width, e.zones.left + (i + 1) * e.zones.width)
+        return [(e.id, i) + tuple(zone_bounds(e.zones, i))
                 for e in self.effs.values() if isinstance(e, TapEffector) for i in range(e.n)]
 
     def pointers(self):
@@ -530,3 +543,10 @@ class Rig:
             elif e.cal_state == "moving":
                 msgs.append("%s: hold still (%s moved %.3f, limit %.3f)" % (eid, e.wobble_name, e.wobble, CAL_MOVE))
         return "Calibrating - rest feet flat / hands open.  " + ("; ".join(msgs) if msgs else "hold still...")
+
+    def learn_status(self):
+        """One line per effector describing what has been learned (for the UI)."""
+        return self.learner.status()
+
+    def save_learning(self):
+        self.learner.save()
