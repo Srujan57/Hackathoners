@@ -570,6 +570,8 @@ function render(){
   setPill("pFps", S.fps === null ? "" : S.fps > 8 ? "ok" : "warn", S.fps === null ? "— fps" : Math.round(S.fps) + " fps");
   const v = $("video");
   if(S.running && !v.getAttribute("src")) v.src = "/video";
+  // Chrome never fires "load" on a live MJPEG stream, so show the picture once the server reports frames.
+  if(S.running && S.fps > 0 && v.getAttribute("src")) $("stage").classList.remove("dead");
   const mi = MODE_INFO[S.mode];
   setPill("pMode", S.mode ? "ok" : "", mi ? mi[0] : (S.mode || "Mode"));
   $("modeDesc").textContent = mi ? "Now: " + mi[0] : "Switch how keys work";

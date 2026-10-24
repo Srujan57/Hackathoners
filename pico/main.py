@@ -38,7 +38,7 @@ NOTE_NAMES = ["C", "D", "E", "F", "G", "A", "B", "C2"]
 # Per-key angles. Tune with C<k> <rest> <press>, then type S and paste the output here.
 # Tip: put REST just ABOVE the key surface - a shorter stroke is a faster, quieter key.
 REST_DEG = [90, 90, 90, 90, 90, 90, 90, 90]
-PRESS_DEG = [120, 120, 120, 120, 120, 120, 120, 120]
+PRESS_DEG = [140, 140, 140, 140, 140, 140, 140, 140]
 
 # PCA9685 internal oscillator is "25 MHz typical", not exact. Measure your board's PWM frequency
 # (logic analyser / scope) and put the measured oscillator value here for accurate angles.
@@ -52,7 +52,8 @@ STAGGER_MS = 6          # servos that start together are started this far apart
 LOOP_MS = 4             # motion update period
 TAP_MS = 150            # how long T<k> holds the key
 MAX_HOLD_MS = 4000      # safety: never hold a key longer (protects servos, frees keys if laptop dies)
-SERVO_US_MIN, SERVO_US_MAX = 500, 2500   # pulse for 0 and 180 degrees
+SERVO_US_MIN, SERVO_US_MAX = 1000, 2000  # pulse for 0 and 180 degrees. Same as the original Air Piano firmware
+                                         # (205-410 PCA9685 ticks at 50 Hz), so REST/PRESS angles match it.
 
 NUM_KEYS = len(KEY_MAP)
 
