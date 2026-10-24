@@ -38,11 +38,146 @@ HAND5_URL = ("https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_s
              "rtmpose-m_simcc-hand5_pt-aic-coco_210e-256x256-74fb594_20230320.zip")
 
 
+def _expand_box(pts, k=1.3):
+    x1, y1 = pts.min(axis=0)
+    x2, y2 = pts.max(axis=0)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    hw, hh = max(x2 - x1, 8.0) * k / 2.0, max(y2 - y1, 8.0) * k / 2.0
+    return [cx - hw, cy - hh, cx + hw, cy + hh]
+
+
+def _contained(a, b):
+    """Fraction of the SMALLER box that lies inside the other. A legs-only keypoint box sits inside the
+    person detector's whole-body box, so plain IoU would call them different people."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    small = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return ix * iy / small if small > 0 else 0.0
+
+
+def fallback_boxes(W, H):
+    """Where to look for the player when no person detector has found them: the whole frame, and a wide box
+    over the lower part of the picture (a floor-level camera that only sees legs is not what the person
+    detector was trained on, so it may find nobody)."""
+    low = [max(0.0, W / 2.0 - 0.6 * H), 0.35 * H, min(float(W), W / 2.0 + 0.6 * H), float(H)]
+    return [[0.0, 0.0, float(W), float(H)], low]
+
+
+class _AsyncDetector:
+    """Runs the person detector on a background thread so it never stalls a frame (onnxruntime releases the
+    GIL while it runs). One job at a time; the newest finished result is picked up with take()."""
+
+    def __init__(self, det_model, lock):
+        self.det = det_model
+        self._lock = lock
+        self._cv = threading.Condition()
+        self._req = None
+        self._res = None
+        self._busy = False
+        self._run = True
+        self._th = threading.Thread(target=self._loop, daemon=True)
+        self._th.start()
+
+    def submit(self, frame):
+        with self._cv:
+            if self._busy or self._req is not None:
+                return False
+            self._req = frame.copy()                 # the camera thread may reuse the original
+            self._cv.notify()
+            return True
+
+    def take(self):
+        with self._cv:
+            r, self._res = self._res, None
+            return r
+
+    def _loop(self):
+        while True:
+            with self._cv:
+                self._cv.wait_for(lambda: self._req is not None or not self._run)
+                if not self._run:
+                    return
+                frame, self._req, self._busy = self._req, None, True
+            try:
+                with self._lock:
+                    boxes = self.det(frame)
+            except Exception as e:
+                print("[detector] error:", e)
+                boxes = None
+            with self._cv:
+                self._res, self._busy = boxes, False
+
+    def close(self):
+        with self._cv:
+            self._run = False
+            self._cv.notify()
+
+
+class FastPose:
+    """Keeps the (slow) person detector off the critical path and never blocks a frame on it.
+
+    The pose model runs on every frame, on boxes taken from the previous frame's confident keypoints.
+    The detector runs on a background thread (every `det_every` frames while tracking, every free moment while
+    the player is lost) and its boxes are merged in: tracked boxes are kept, newly seen people are added.
+    While the player is lost and the detector has found nobody, the pose model is tried on fall-back boxes
+    (whole frame + lower part), so a legs-only view that the person detector misses can still lock on.
+    async_det=False runs the detector in line instead (used by the tests)."""
+
+    def __init__(self, solution, det_every=30, conf=0.3, min_pts=4, async_det=True):
+        self.sol, self.det_every, self.conf, self.min_pts = solution, max(1, int(det_every)), conf, min_pts
+        self.boxes, self.n = None, 0
+        self._lock = threading.Lock()                 # one detector call at a time
+        self.bg = _AsyncDetector(solution.det_model, self._lock) if async_det else None
+
+    @staticmethod
+    def _merge(tracked, fresh):
+        out = list(tracked)
+        for f in fresh:
+            if not any(_contained(t, f) > 0.5 for t in tracked):
+                out.append(list(f))
+        return out
+
+    def __call__(self, frame):
+        H, W = frame.shape[:2]
+        lost = self.boxes is None
+        if self.bg is not None:
+            fresh = self.bg.take()                    # a background result that finished since last frame
+            self.n += 1
+            if lost or self.n % self.det_every == 0:
+                self.bg.submit(frame)
+        else:
+            redetect = lost or self.n % self.det_every == 0
+            self.n += 1
+            with self._lock:
+                fresh = self.sol.det_model(frame) if redetect else None
+        if fresh is not None and len(fresh) == 0:
+            fresh = None
+        if lost:
+            boxes = [list(b) for b in fresh] if fresh is not None else fallback_boxes(W, H)
+        elif fresh is not None:
+            boxes = self._merge(self.boxes, fresh)
+        else:
+            boxes = self.boxes
+        k, s = self.sol.pose_model(frame, bboxes=boxes)
+        nb = []
+        for kp, sc in zip(k, s):
+            ok = np.asarray(sc) >= self.conf
+            if int(ok.sum()) >= self.min_pts:
+                nb.append(_expand_box(np.asarray(kp)[ok]))
+        self.boxes = nb or None
+        return k, s
+
+    def close(self):
+        if self.bg is not None:
+            self.bg.close()
+
+
 class PoseBackend:
-    def __init__(self, need_hands, mode="balanced", device="cpu", refine_hands=True):
+    def __init__(self, need_hands, mode="lightweight", device="cpu", refine_hands=True, det_every=30):
         from rtmlib import BodyWithFeet, Wholebody
         self.need_hands = need_hands
         self.refiner = None
+        self.det_every = det_every
         if need_hands:
             self.model = Wholebody(mode=mode, backend="onnxruntime", device=device)
             self.layout = "coco133"
@@ -54,9 +189,16 @@ class PoseBackend:
             self.model = BodyWithFeet(mode=mode, backend="onnxruntime", device=device)
             self.layout = "halpe26"
 
+        self.fast = FastPose(self.model, det_every) if det_every > 1 else None
+
+    def close(self):
+        if self.fast is not None:
+            self.fast.close()
+
     def infer(self, frame_bgr):
-        kpts, scores = self.model(frame_bgr)
-        return kpts, scores
+        if self.fast is not None:
+            return self.fast(frame_bgr)
+        return self.model(frame_bgr)
 
 
 # --------------------------------------------------------------------------

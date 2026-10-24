@@ -50,17 +50,21 @@ def draw(frame, cv2, rig, player, link, menu, fps, lat_ms, hud_extra=()):
     H, W = frame.shape[:2]
     overlay = frame.copy()
 
-    # zone bands for foot / hand-pad lanes
-    for eid, slot, x0, x1 in rig.zone_rects():
+    # zone bands for foot / hand-pad lanes (placeholders until calibration has placed them, so hide them)
+    zones = [] if rig.calibrating else rig.zone_rects()
+    rows = {} if rig.calibrating else rig.lane_rows()
+    for eid, slot, x0, x1 in zones:
         held = (eid, slot) in player.active
         color = (60, 200, 90) if held else ((70, 70, 70) if slot % 2 else (110, 110, 110))
-        cv2.rectangle(overlay, (int(x0 * H), int(H * 0.78)), (int(x1 * H), H), color, -1)
+        ry0, ry1 = rows[eid]
+        cv2.rectangle(overlay, (int(x0 * H), int(H * ry0)), (int(x1 * H), int(H * ry1)), color, -1)
     cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
-    for eid, slot, x0, x1 in rig.zone_rects():
+    for eid, slot, x0, x1 in zones:
         label = player.label_for((eid, slot))
         cx = int((x0 + x1) / 2 * H)
-        cv2.rectangle(frame, (int(x0 * H), int(H * 0.78)), (int(x1 * H), H), (200, 200, 200), 1)
-        cv2.putText(frame, label, (cx - 14, H - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        ry0, ry1 = rows[eid]
+        cv2.rectangle(frame, (int(x0 * H), int(H * ry0)), (int(x1 * H), int(H * ry1)), (200, 200, 200), 1)
+        cv2.putText(frame, label, (cx - 14, int(H * ry1) - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     # finger chips (one per finger, bottom-right)
     y = int(H * 0.70)
@@ -113,6 +117,8 @@ def draw(frame, cv2, rig, player, link, menu, fps, lat_ms, hud_extra=()):
         lines.append("Song: %s (%d/%d)   Next: %s" % (SONGS[player.song][0], i, n, player.next_note_name()))
     if rig.calibrating:
         lines.append(rig.status())
+        if rig.setup_hint:
+            lines.append("SET-UP: " + rig.setup_hint)
     lines += list(hud_extra)
     lines += rig.warnings[:2]
     lines.append("hold a body part over a top button  |  keys: C M N P R Q")

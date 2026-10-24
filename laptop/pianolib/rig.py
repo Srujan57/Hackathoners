@@ -11,7 +11,7 @@ import math
 from collections import deque
 
 from .detect import (BASE_LIFT_HI, NOISE_K, SETTLE_S, V_SETTLE, DriftBaseline, FlexDetector, TapDetector,
-                     ZoneMap, median, stdev)
+                     ZoneMap, detrended_std, median, stdev)
 from .filters import OneEuro
 
 MIN_SCORE = 0.35       # keypoints below this confidence are ignored
@@ -27,6 +27,64 @@ V_RISING = 0.8         # ...and not rising faster than this
 MIN_REF = 0.04         # smallest allowed reference length (frame heights)
 MIN_ZONE_W = 0.03      # narrowest allowed zone (frame heights)
 FINGER_MIN_LEN = 0.25  # finger shorter than this x palm length is too short to track reliably
+
+
+# ---- camera set-up advice (shown while calibrating) ----
+# These are heuristics, not measurements: a typical adult foot is ~26 cm and a typical webcam sees ~45 degrees
+# top-to-bottom. Real error in the distance figure is easily +-30% (small feet, wide-angle lens, tilted camera).
+ASSUMED_FOOT_M = 0.26
+ASSUMED_VFOV_DEG = 45.0
+GOOD_FOOT_LEN = (0.14, 0.32)     # toe-to-heel length as a fraction of frame height that tracks well enough to try
+TARGET_FOOT_LEN = 0.22
+EDGE = 0.04                      # keypoints closer than this to the frame edge count as cut off
+
+
+def distance_cm(foot_len_frac):
+    frame_h = ASSUMED_FOOT_M / max(foot_len_frac, 1e-3)
+    return 100.0 * frame_h / (2.0 * math.tan(math.radians(ASSUMED_VFOV_DEG) / 2.0))
+
+
+def _round10(cm):
+    return int(round(cm / 10.0) * 10)
+
+
+def setup_advice(obs, profile, aspect):
+    """One short sentence telling the player how to move the camera / themselves. '' means the set-up looks fine.
+    Only checks feet (hands are checked by calibration itself)."""
+    ids = [e.id for e in profile.effectors if e.kind == "foot"]
+    if not ids:
+        return ""
+    lens, lowest, missing = [], 0.0, []
+    xmin, xmax = 9.0, -9.0
+    for eid in ids:
+        pts = {n: p for n, p in obs.get(eid, {}).items() if p[2] >= MIN_SCORE and all(map(math.isfinite, p))}
+        if not pts:
+            missing.append(eid)
+            continue
+        lowest = max(lowest, max(p[1] for p in pts.values()))
+        xmin, xmax = min(xmin, min(p[0] for p in pts.values())), max(xmax, max(p[0] for p in pts.values()))
+        if "toe" in pts and "heel" in pts:
+            lens.append(_dist(pts["toe"], pts["heel"]))
+    if missing:
+        return ("Can't see %s: make sure both feet are in view (tilt the camera down, or step back)."
+                % ", ".join(missing))
+    if lowest > 1.0 - EDGE:
+        extra = ""
+        if lens:
+            extra = " or step back about %d cm" % _round10(max(10.0, distance_cm(min(lens)) * 0.2))
+        return "Feet are cut off at the bottom: tilt the camera down%s." % extra
+    if xmin < EDGE or xmax > aspect - EDGE:
+        return "A foot is at the edge of the picture: move to the middle or turn the camera."
+    if not lens:
+        return "Can't measure foot size yet (toe and heel not both visible)."
+    small, big = min(lens), max(lens)
+    if small < GOOD_FOOT_LEN[0]:
+        d = distance_cm(small) - distance_cm(TARGET_FOOT_LEN)
+        return "Too far from the camera: move closer by about %d cm (rough estimate)." % _round10(abs(d))
+    if big > GOOD_FOOT_LEN[1]:
+        d = distance_cm(TARGET_FOOT_LEN) - distance_cm(big)
+        return "Too close to the camera: step back about %d cm (rough estimate)." % _round10(abs(d))
+    return ""
 
 
 def _dist(a, b):
@@ -45,6 +103,7 @@ class BaseEffector:
         self.calibrated = False
         self.cal = []
         self.cal_state = "missing"
+        self.wobble, self.wobble_name = 0.0, ""
         self.visible = False
         self.last_seen = None
         self._lost_since = None
@@ -90,24 +149,35 @@ class BaseEffector:
         self.cal.append((t, f))
         while self.cal and t - self.cal[0][0] > CAL_WINDOW_S:
             self.cal.pop(0)
+        self.wobble, self.wobble_name = self._wobble()
+        if self.wobble > CAL_MOVE:
+            self.cal_state = "moving"          # the window slides on, so this clears CAL_WINDOW_S after you stop
+            return False
         if t - self.cal[0][0] < CAL_MIN_S or len(self.cal) < 8:
             self.cal_state = "hold"
-            return False
-        if self._wobble() > CAL_MOVE:
-            self.cal_state = "moving"
-            self.cal = self.cal[-3:]
             return False
         self.cal_state = "ok"
         return True
 
+    @staticmethod
+    def _spread(vals):
+        """Range of the values after dropping the most extreme 10% at each end, so that one glitchy frame
+        (the pose model briefly jumping) cannot make a perfectly still player look like they are moving."""
+        v = sorted(vals)
+        k = len(v) // 10
+        return v[len(v) - 1 - k] - v[k]
+
     def _wobble(self):
-        worst = 0.0
+        """(largest spread of any tracked point, name of that point)."""
+        worst, who = 0.0, ""
         for name in self.CAL_TRACK:
             xs = [s[1][name][0] for s in self.cal if name in s[1]]
             ys = [s[1][name][1] for s in self.cal if name in s[1]]
             if len(xs) >= 4:
-                worst = max(worst, max(xs) - min(xs), max(ys) - min(ys))
-        return worst
+                w = max(self._spread(xs), self._spread(ys))
+                if w > worst:
+                    worst, who = w, name
+        return worst, who
 
     def _medians(self):
         need = 0.6 * len(self.cal)
@@ -139,6 +209,7 @@ class TapEffector(BaseEffector):
         self.det = TapDetector()
         self.zones = ZoneMap(0.5, self.n, 0.1)
         self.rest_x = 0.5
+        self.last_lift = 0.0
         self.ref = 0.15
         self.base = {}
         self.reset_runtime()
@@ -160,9 +231,16 @@ class TapEffector(BaseEffector):
         pos = {n: (v[0], v[1]) for n, v in med.items()}
         refs = [_dist(pos[a], pos[b]) for a, b in self.REF_PAIRS if a in pos and b in pos]
         self.ref = max([MIN_REF] + refs)
-        self.base = {n: DriftBaseline(pos[n][1]) for n in pos}
+        # start the baseline where the foot is NOW (the last few samples), not at the window median: if the
+        # foot was drifting while calibrating, the median is already out of date
+        recent = self.cal[-5:]
+        self.base = {n: DriftBaseline(median([f[n][1] for _, f in recent if n in f]) if
+                                      any(n in f for _, f in recent) else pos[n][1]) for n in pos}
         lift_names = [n for n in self.LIFT if n in med] or [n for n in self.FALLBACK if n in med]
-        sigma = max([stdev([(y - pos[n][1]) / self.ref for y in med[n][3]]) for n in lift_names] or [0.0])
+        sigma = 0.0
+        for n in lift_names:
+            pairs = [(t, f[n][1]) for t, f in self.cal if n in f]
+            sigma = max(sigma, detrended_std([t for t, _ in pairs], [y / self.ref for _, y in pairs]))
         hi = max(BASE_LIFT_HI / self.sens, NOISE_K * sigma)
         self.det = TapDetector(lift_hi=hi)
         anchor = next((pos[n] for n in self.ANCHOR if n in pos), None)
@@ -196,6 +274,7 @@ class TapEffector(BaseEffector):
             self.base[n].predict(dt)                     # coast along the estimated drift
 
         lift = max((self.base[n].b - f[n][1]) / self.ref for n in names)
+        self.last_lift = lift                            # for the recorder / replay tool
 
         # Learn the planted position only from a foot that is down, still, not rising, and (optionally) near
         # the baseline - so neither the tail of a tap nor the start of the next lift is mistaken for floor.
@@ -362,6 +441,8 @@ class Rig:
         self.aspect = aspect
         self.effs = {e.id: make_effector(e, profile.sensitivity, min_score) for e in profile.effectors}
         self.warnings = []
+        self.stacked, self._lane_order = False, []
+        self.setup_hint = ""
         self.recalibrate()
 
     def recalibrate(self):
@@ -376,6 +457,7 @@ class Rig:
 
     def update(self, t, obs, menu_y=0.0):
         if self.state == "CAL":
+            self.setup_hint = setup_advice(obs, self.profile, self.aspect)
             ready = [e.cal_feed(t, obs.get(e.id, {})) for e in self.effs.values()]
             if all(ready):
                 for e in self.effs.values():
@@ -394,25 +476,31 @@ class Rig:
 
     def _fit_lanes(self):
         """Place each lane so the resting position is the CENTRE of one zone (a tap in place always plays
-        the same note), with more zones on the outward side, then shrink zones if lanes would overlap."""
+        the same note), with more zones on the outward side.
+
+        Zones keep the width the profile asks for even when the two lanes overlap: every foot/hand is tracked
+        on its own, so a left-foot zone and a right-foot zone sharing floor space cannot be confused. (An
+        earlier version shrank zones to keep lanes apart, which made them far too narrow for feet that stand
+        a normal distance apart.) Overlapping lanes are drawn in separate rows so they stay readable."""
         lanes = sorted((e for e in self.effs.values() if isinstance(e, TapEffector)),
                        key=lambda e: e.rest_x)
-        base_w = self.profile.zone_width * self.aspect
-        w = base_w
-        for a, b in zip(lanes, lanes[1:]):
-            room = a.n - a.home + b.home                      # zones between the two resting positions
-            w = min(w, (b.rest_x - a.rest_x) / max(room, 1e-6))
-        if w < base_w - 1e-6:
-            self.warnings.append("zones narrowed to fit - move your feet/hands further apart for bigger zones")
-        if w < MIN_ZONE_W:
-            self.warnings.append("zones are very small - increase the distance between the two sides")
-            w = MIN_ZONE_W
+        w = max(self.profile.zone_width * self.aspect, MIN_ZONE_W)
         for e in lanes:
             left = e.rest_x - (e.home + 0.5) * w
             left = min(max(left, 0.0), max(self.aspect - e.n * w, 0.0))
             e.zones = ZoneMap(left + e.n * w / 2.0, e.n, w)
+        self.stacked = any(a.zones.left + a.n * w > b.zones.left + 1e-9 for a, b in zip(lanes, lanes[1:]))
+        self._lane_order = [e.id for e in lanes]
         for e in self.effs.values():
             self.warnings += e.warnings
+
+    def lane_rows(self):
+        """{effector_id: (top, bottom)} as fractions of frame height for drawing the zone bands."""
+        if not getattr(self, "stacked", False):
+            return {eid: (0.78, 1.0) for eid in self._lane_order}
+        n = len(self._lane_order)
+        h = 0.30 / n
+        return {eid: (1.0 - 0.30 + i * h, 1.0 - 0.30 + (i + 1) * h) for i, eid in enumerate(self._lane_order)}
 
     # ---- queries for the UI / pose association -------------------------------
     def zone_rects(self):
@@ -440,5 +528,5 @@ class Rig:
             if e.cal_state == "missing":
                 msgs.append("%s: not visible" % eid)
             elif e.cal_state == "moving":
-                msgs.append("%s: hold still" % eid)
+                msgs.append("%s: hold still (%s moved %.3f, limit %.3f)" % (eid, e.wobble_name, e.wobble, CAL_MOVE))
         return "Calibrating - rest feet flat / hands open.  " + ("; ".join(msgs) if msgs else "hold still...")

@@ -170,3 +170,15 @@ def median(vals):
 
 def stdev(vals):
     return statistics.pstdev(vals) if len(vals) > 1 else 0.0
+
+
+def detrended_std(ts, vals):
+    """Std of the residuals after removing a straight line. Slow drift during calibration is not noise, and
+    counting it as noise would raise the tap threshold for no reason."""
+    n = len(vals)
+    if n < 3:
+        return stdev(vals)
+    mt, mv = sum(ts) / n, sum(vals) / n
+    den = sum((t - mt) ** 2 for t in ts)
+    slope = sum((t - mt) * (v - mv) for t, v in zip(ts, vals)) / den if den > 1e-12 else 0.0
+    return stdev([v - (mv + slope * (t - mt)) for t, v in zip(ts, vals)])

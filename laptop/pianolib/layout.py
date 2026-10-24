@@ -35,6 +35,7 @@ CHORD_DEGREES = {
     5: [0, 1, 3, 4, 5],
     6: [0, 1, 2, 3, 4, 5],
     7: [0, 1, 2, 3, 4, 5, 6],
+    8: [0, 1, 2, 3, 4, 5, 6, 0],      # the top zone repeats the I chord an octave up (same triad on this instrument)
 }
 
 
@@ -68,7 +69,7 @@ def note_actions(n):
 
 
 def chord_actions(n):
-    degrees = _spread(n, CHORD_DEGREES, 7)
+    degrees = _spread(n, CHORD_DEGREES, 8)
     return [Action(chord_keys(d), CHORD_NAMES[d]) for d in degrees]
 
 

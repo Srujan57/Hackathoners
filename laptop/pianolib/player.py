@@ -24,6 +24,7 @@ class PianoLink:
     def __init__(self, port=None, baud=115200):
         self.ser = None
         self.error = ""                # non-empty = the link is broken (shown on screen)
+        self.sinks = []                # extra listeners (e.g. the software synth): note_on/note_off/all_off
         self.holders = [0] * NUM_KEYS
         if port:
             import serial
@@ -57,6 +58,7 @@ class PianoLink:
         self.holders[k] += 1
         if self.holders[k] == 1:
             self._send("P%d" % k)
+            self._sinks("note_on", k)
 
     def release(self, k):
         if not 0 <= k < NUM_KEYS or self.holders[k] == 0:
@@ -64,10 +66,19 @@ class PianoLink:
         self.holders[k] -= 1
         if self.holders[k] == 0:
             self._send("R%d" % k)
+            self._sinks("note_off", k)
 
     def release_all(self):
         self.holders = [0] * NUM_KEYS
         self._send("A")
+        self._sinks("all_off")
+
+    def _sinks(self, name, *args):
+        for sink in self.sinks:
+            try:
+                getattr(sink, name)(*args)
+            except Exception as e:             # a sound problem must never stop the instrument
+                print("[audio] %s failed: %s" % (name, e))
 
     def held(self, k):
         return self.holders[k] > 0

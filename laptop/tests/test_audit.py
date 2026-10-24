@@ -257,3 +257,118 @@ def test_app_keeps_the_old_profile_if_the_new_model_cannot_load():
 def test_foot_kpts_helper_roundtrip_still_ok():
     k, s = foot_kpts({"left": {"ankle": (0.5, 0.8, 0.9)}})
     assert k.shape[2] == 2 and math.isfinite(float(k.sum()))
+
+
+# ---------------------------------------------------------------- calibration stillness
+def _still_foot_run(glitch_every=0, jitter=0.0, dur=3.0):
+    rig = Rig(PRESETS["one_foot"], aspect=W / float(H))
+    sc = sim.FootScript(x0=0.8, noise=0.002, seed=2)
+    for i, t in enumerate(sim.frames(dur)):
+        pts = sc.sample(t)
+        if glitch_every and i % glitch_every == 0 and i:
+            pts = {k: (x + 0.08, y - 0.08, s) for k, (x, y, s) in pts.items()}     # one wild frame
+        rig.update(t, {"R_FOOT": pts})
+    return rig
+
+
+def test_one_glitch_frame_does_not_block_calibration():
+    assert not _still_foot_run(glitch_every=45).calibrating
+
+
+def test_a_clearly_moving_player_still_blocks_calibration():
+    rig = Rig(PRESETS["one_foot"], aspect=W / float(H))
+    sc = sim.FootScript(x0=0.8, slides=[(0.0, 3.0, 0.5)], noise=0.002, seed=2)
+    for t in sim.frames(3):
+        rig.update(t, {"R_FOOT": sc.sample(t)})
+    assert rig.calibrating and "hold still" in rig.status() and "moved" in rig.status()
+
+
+def test_status_names_the_point_that_is_moving():
+    rig = Rig(PRESETS["one_foot"], aspect=W / float(H))
+    sc = sim.FootScript(x0=0.8, slides=[(0.0, 3.0, 0.5)], noise=0.002, seed=2)
+    for t in sim.frames(2.0):
+        rig.update(t, {"R_FOOT": sc.sample(t)})
+    assert any(n in rig.status() for n in ("toe", "heel", "ankle"))
+
+
+# ---------------------------------------------------------------- recorder / replay tool
+def test_replay_reproduces_the_live_events(tmp_path):
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+    import json as _json
+
+    import replay
+
+    prof = PRESETS["one_foot"]
+    sc = sim.FootScript(x0=0.8, taps=[{"t": 3.0 + i, "amp": 0.05} for i in range(5)], seed=4)
+    rig = Rig(prof, aspect=W / float(H))
+    f = tmp_path / "rec.jsonl"
+    with open(f, "w") as fh:
+        fh.write(_json.dumps({"profile": prof.to_dict(), "aspect": W / float(H)}) + "\n")
+        for t in sim.frames(10):
+            obs = {"R_FOOT": sc.sample(t)}
+            evs = rig.update(t, obs)
+            fh.write(_json.dumps({"t": t, "ev": [list(e) for e in evs],
+                                  "obs": {k: {n: list(v) for n, v in p.items()} for k, p in obs.items()}}) + "\n")
+    head, frames = replay.load(str(f))
+    rig2, events, cal_t = replay.replay(head, frames, csv_path=str(tmp_path / "lift.csv"))
+    live = [(round(fr["t"], 3), e[0], e[1], e[2]) for fr in frames for e in fr["ev"]]
+    again = [(round(e[0], 3), e[1], e[2], e[3]) for e in events]
+    assert again == live
+    assert len([e for e in events if e[3] == "down"]) == 5
+    assert (tmp_path / "lift.csv").read_text().startswith("t,calibrating")
+    replay.summarise(head, frames, rig2, events, cal_t)          # must not raise
+    # a different sensitivity is accepted
+    replay.replay(head, frames, sens=0.7)
+
+
+# ---------------------------------------------------------------- camera set-up advice
+from pianolib.rig import distance_cm, setup_advice   # noqa: E402
+
+ASPECT = W / float(H)
+
+
+def feet_obs(length, y=0.85, lx=0.6, rx=1.1, hide=()):
+    def foot(x):
+        return {"toe": (x, y, 0.9), "heel": (x, y + length, 0.9), "ankle": (x, y + length * 0.5, 0.9)}
+    obs = {"L_FOOT": foot(lx), "R_FOOT": foot(rx)}
+    for h in hide:
+        obs.pop(h)
+    return obs
+
+
+def test_good_distance_gives_no_advice():
+    assert setup_advice(feet_obs(0.2, y=0.7), PRESETS["two_feet"], ASPECT) == ""
+
+
+def test_too_far_says_move_closer_with_a_number():
+    msg = setup_advice(feet_obs(0.08, y=0.7), PRESETS["two_feet"], ASPECT)
+    assert "Too far" in msg and "closer" in msg and "cm" in msg
+
+
+def test_too_close_says_step_back_with_a_number():
+    msg = setup_advice(feet_obs(0.45, y=0.45), PRESETS["two_feet"], ASPECT)
+    assert "Too close" in msg and "step back" in msg and "cm" in msg
+
+
+def test_the_numbers_move_in_the_right_direction():
+    import re
+    far = int(re.search(r"(\d+) cm", setup_advice(feet_obs(0.05, y=0.7), PRESETS["two_feet"], ASPECT)).group(1))
+    less_far = int(re.search(r"(\d+) cm", setup_advice(feet_obs(0.10, y=0.7), PRESETS["two_feet"], ASPECT)).group(1))
+    assert far > less_far
+    assert distance_cm(0.1) > distance_cm(0.2) > distance_cm(0.3)
+
+
+def test_cropped_feet_and_missing_foot_and_edges():
+    assert "cut off" in setup_advice(feet_obs(0.2, y=0.85), PRESETS["two_feet"], ASPECT)
+    assert "Can't see R_FOOT" in setup_advice(feet_obs(0.2, y=0.7, hide=("R_FOOT",)), PRESETS["two_feet"], ASPECT)
+    assert "edge" in setup_advice(feet_obs(0.2, y=0.7, lx=0.02), PRESETS["two_feet"], ASPECT)
+
+
+def test_hand_only_profile_gets_no_foot_advice():
+    assert setup_advice({}, PRESETS["one_hand_fingers"], ASPECT) == ""
+
+
+def test_rig_shows_the_advice_only_while_calibrating():
+    rig = Rig(PRESETS["two_feet"], aspect=ASPECT)
+    rig.update(0.0, feet_obs(0.45, y=0.45))
+    assert "step back" in rig.setup_hint

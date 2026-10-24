@@ -274,14 +274,20 @@ class TestRig:
         self.run(rig, sc, 3)
         assert not rig.calibrating and rig.status() == ""
 
-    def test_lanes_do_not_overlap_when_feet_are_close(self):
-        rig, sc = self.make(lx=0.80, rx=1.00)                  # feet 0.2 apart
+    def test_zones_keep_their_width_when_feet_are_close_and_lanes_are_stacked(self):
+        rig, sc = self.make(lx=0.80, rx=1.00)                  # feet 0.2 apart: lanes overlap
         self.run(rig, sc, 3)
-        rects = rig.zone_rects()
-        left_max = max(x1 for eid, _, x0, x1 in rects if eid == "L_FOOT")
-        right_min = min(x0 for eid, _, x0, x1 in rects if eid == "R_FOOT")
-        assert left_max <= right_min + 1e-9
-        assert any("narrowed" in w for w in rig.warnings)
+        widths = {round(e.zones.width, 6) for e in rig.effs.values()}
+        assert widths == {round(PRESETS["two_feet"].zone_width * rig.aspect, 6)}
+        assert rig.stacked
+        rows = rig.lane_rows()
+        assert rows["L_FOOT"][1] <= rows["R_FOOT"][0] + 1e-9     # drawn in separate rows
+
+    def test_far_apart_feet_share_one_row(self):
+        rig, sc = self.make(lx=0.35, rx=1.45)
+        self.run(rig, sc, 3)
+        assert not rig.stacked
+        assert len(set(rig.lane_rows().values())) == 1
 
     def test_tapping_in_place_always_plays_the_same_zone(self):
         rig, sc = self.make(ltaps=taps(3.0, 0.7, 10, 0.05), rtaps=taps(3.3, 0.7, 10, 0.05))
@@ -588,3 +594,9 @@ class TestPipeline:
         assert made == [False, True] and app.rig.calibrating
         app.set_profile(PRESETS["one_foot"])
         assert made == [False, True, False]
+
+
+class TestChordLayout8:
+    def test_eight_slot_chords_have_no_accidental_duplicate_at_the_start(self):
+        labels = [a.label for a in layout.chord_actions(8)]
+        assert labels == ["C", "Dm", "Em", "F", "G", "Am", "Bdim", "C"]
