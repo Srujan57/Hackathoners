@@ -1,418 +1,288 @@
-"""Adaptive learning: the piano tunes itself to each player while they play.
+"""
+pianolib/adapt.py - adaptive learning: the piano tunes itself to each player.
 
-Built on top of detect.py / rig.py (drop-in subclasses, same units, same state machines):
+What it learns, per limb (left foot, right hand, etc.):
+  1. REACH      - where this person can actually move. Zones stretch to fit their range,
+                  so someone who can only slide a foot 20 cm still gets the full octave.
+  2. STRENGTH   - how high they usually lift / tap. The "lifted" threshold follows them,
+                  so weaker movements still play notes and strong ones don't double-fire.
+  3. STEADINESS - how much they shake when resting (tremor). Thresholds stay above that
+                  noise and smoothing gets stronger, so tremor doesn't trigger notes.
+  4. AIM        - where they actually land when aiming at each key (warm-up game), and
+                  quick "oops" corrections in free play. Key boundaries move to match.
+  5. FATIGUE    - if their taps get weaker over a session, it notices and flags it.
 
-  STRENGTH  AdaptiveTapDetector / AdaptiveFlexDetector learn how big this person's movements are,
-            including "almost taps" that never crossed the threshold, and move the threshold to half
-            of their typical movement. Weak players start getting notes; strong players stop getting
-            accidental ones. Never drops below the noise floor (calibration noise or tremor seen live).
-  TREMOR    while a foot/finger rests, the live shake is measured and raises the noise floor.
-  REACH     AdaptiveZoneMap shrinks zone width when the player never reaches the outer zones, so
-            every note becomes reachable with the movement they actually have.
-  AIM       a quick re-tap on the neighbouring zone right after landing near a boundary = probably a
-            miss; that boundary moves a little toward where they really land.
-  FATIGUE   taps getting much weaker over the session -> a "take a break" warning.
-  MEMORY    everything is saved to users/<user>.json and restored on the next calibration.
+Everything is saved to a per-user JSON file, so next session starts already tuned.
 
-Units: lift / flex are the same units the detectors already use (fractions of foot length / finger
-length), so learned values carry over between sessions even if the camera moves.
+Units: x is 0-1 across the frame, h is height above that limb's floor/rest line
+(0-1 of frame height, positive = lifted). Use whatever your detector already has.
+
+Hook it up (3 calls):
+  model.observe(limb, t, x, h)                    every frame the limb is visible
+  model.on_tap(limb, t, x_land, peak_h, duration) when a tap/press finishes
+  model.zone_of(limb, x), model.thresholds(limb)  read these instead of constants
 """
 
 import json
-import os
-from bisect import bisect_right
+import statistics
 from collections import deque
 
-from .detect import LIFT_LO_FRAC, NOISE_K, FlexDetector, TapDetector, ZoneMap, median
+NUM_KEYS = 8
 
-MIN_SAMPLES = 6          # movements seen before thresholds start moving
-WINDOW = 15              # recent movements used for "typical"
-TARGET_FRAC = 0.5        # threshold = half of the player's typical movement
-RATE = 0.3               # how fast the threshold moves toward the target
-ATTEMPT_MAX_S = 0.8      # a sub-threshold excursion shorter than this counts as an attempt
-TREMOR_MAX_S = 0.15      # ...but one shorter than this is a shake, not a movement
-AUTOSAVE_EVERY = 10      # taps between saves
-MIN_W = 0.03             # narrowest zone (same as rig.MIN_ZONE_W)
-MAX_SHRINK = 0.5         # zones never shrink below half their calibrated width
-MAX_NUDGE = 0.3          # a boundary never moves more than 0.3 zone widths
-CORRECT_GAP_S = 0.45     # adjacent re-tap this fast after landing near a boundary = a miss
-NEAR_EDGE = 0.35         # "near a boundary" = within this many zone widths
-USERS_DIR = os.environ.get("PIANO_USERS_DIR", "users")
+# Safety rails: learning can never push values outside these.
+LIFT_MIN, LIFT_MAX = 0.012, 0.09
+MIN_ZONE_WIDTH = 0.02          # no key can shrink below 2% of the frame width
+MIN_TAPS_TO_ADAPT = 8          # stay on defaults until we've seen this many taps
+CORRECTION_GAP_S = 0.5         # an adjacent re-tap this fast after...
+CORRECTION_MAX_DUR_S = 0.18    # ...a very short note = probably a miss
+CORRECTION_RATE = 0.35
 
 
-class StrengthStats:
-    """How big one effector's movements are. Shared by the tap and flex detectors."""
+def _pct(values, p):
+    s = sorted(values)
+    if not s:
+        return None
+    i = min(len(s) - 1, max(0, int(round(p / 100.0 * (len(s) - 1)))))
+    return s[i]
 
-    def __init__(self, floor_abs, ceil_abs=None, ceil_mult=2.0):
-        self.floor_abs = floor_abs
-        self.ceil_abs = ceil_abs
-        self.ceil_mult = ceil_mult
-        self.recent = deque(maxlen=WINDOW)
-        self.session = []
-        self.hi = None
-        self.cal_hi = None
-        self.cal_sigma = 0.0
-        self._m = 0.0
-        self._v = 0.0
-        self.live_sigma = 0.0
+
+class LimbModel:
+    def __init__(self, name, default_lift=0.045, default_land=0.02):
+        self.name = name
+        self.default_lift = default_lift
+        self.default_land = default_land
+        self.peaks = deque(maxlen=60)        # recent tap heights
+        self.session_peaks = []              # this session only, for fatigue
+        self.durations = deque(maxlen=60)
+        self.landings = deque(maxlen=200)    # x where taps landed
+        self.noise = 0.0                     # tremor while resting (EMA of abs deviation)
+        self._rest_h = None
+        self.boundaries = None               # 9 edges for 8 zones, or None = uniform
+        self.warmup = {}                     # zone -> list of landing x
+        self.last_tap = None                 # (t, zone, x, duration)
+        self.corrections = 0
         self.taps = 0
-        self.attempts = 0
 
-    def bind(self, cal_hi, cal_sigma):
-        self.cal_hi, self.cal_sigma = cal_hi, cal_sigma
-        if self.hi is not None:
-            self.hi = self._clamp(self.hi)
+    # ---------- learning inputs ----------
+    def observe(self, t, x, h):
+        land = self.thresholds()["land"]
+        if h < land:                         # resting: learn tremor size
+            if self._rest_h is None:
+                self._rest_h = h
+            self._rest_h = 0.95 * self._rest_h + 0.05 * h
+            dev = abs(h - self._rest_h)
+            self.noise = 0.97 * self.noise + 0.03 * dev
 
-    def observe_rest(self, v):
-        d = v - self._m
-        self._m += 0.05 * d
-        self._v = 0.95 * (self._v + 0.05 * d * d)
-        self.live_sigma = self._v ** 0.5
+    def on_tap(self, t, x, peak_h, duration, allow_corrections=True):
+        self.taps += 1
+        self.peaks.append(peak_h)
+        self.session_peaks.append(peak_h)
+        self.durations.append(duration)
+        self.landings.append(x)
 
-    def noise_floor(self):
-        floor = min(self.floor_abs, self.cal_hi) if self.cal_hi else self.floor_abs
-        return max(floor, NOISE_K * max(self.cal_sigma, self.live_sigma))
+        zone = self.zone_of(x)
+        if allow_corrections and self.last_tap:
+            pt, pz, px, pdur = self.last_tap
+            if (abs(zone - pz) == 1 and t - pt < CORRECTION_GAP_S
+                    and pdur < CORRECTION_MAX_DUR_S):
+                self._nudge_boundary(pz, zone, px)
+                self.corrections += 1
+        self.last_tap = (t, zone, x, duration)
+        return zone
 
-    def attempt_floor(self, hi):
-        return max(self.noise_floor(), 0.25 * hi)
+    def on_warmup_hit(self, target_zone, x):
+        self.warmup.setdefault(target_zone, []).append(x)
+        self.landings.append(x)
 
-    def _ceiling(self):
-        c = self.ceil_mult * (self.cal_hi or 0.0)
-        return min(c, self.ceil_abs) if self.ceil_abs else c
+    # ---------- learned outputs ----------
+    def thresholds(self):
+        lift, land = self.default_lift, self.default_land
+        if len(self.peaks) >= MIN_TAPS_TO_ADAPT:
+            typical = statistics.median(self.peaks)
+            lift = 0.45 * typical            # half their normal lift counts as a lift
+        lift = max(lift, 3.0 * self.noise)   # always clear the tremor
+        lift = min(max(lift, LIFT_MIN), LIFT_MAX)
+        if len(self.peaks) >= MIN_TAPS_TO_ADAPT or self.noise > 0:
+            land = min(max(0.45 * lift, 1.5 * self.noise, 0.006), 0.8 * lift)
+        # smoothing: shakier = smoother (weight of the newest sample)
+        alpha = min(0.6, max(0.2, 0.6 - 20.0 * self.noise))
+        return {"lift": round(lift, 4), "land": round(land, 4), "smooth_alpha": round(alpha, 3)}
 
-    def _clamp(self, h):
-        return max(self.noise_floor(), min(self._ceiling(), h))
+    def reach(self):
+        if len(self.landings) < MIN_TAPS_TO_ADAPT:
+            return 0.0, 1.0
+        lo, hi = _pct(self.landings, 3), _pct(self.landings, 97)
+        pad = 0.05 * max(hi - lo, 0.1)
+        lo, hi = max(0.0, lo - pad), min(1.0, hi + pad)
+        if hi - lo < NUM_KEYS * MIN_ZONE_WIDTH:
+            mid = (lo + hi) / 2
+            half = NUM_KEYS * MIN_ZONE_WIDTH / 2
+            lo, hi = max(0.0, mid - half), min(1.0, mid + half)
+        return lo, hi
 
-    def add(self, peak, success):
-        self.recent.append(peak)
-        if success:
-            self.taps += 1
-            self.session.append(peak)
-        else:
-            self.attempts += 1
+    def edges(self):
+        if self.boundaries:
+            return self.boundaries
+        lo, hi = self.reach()
+        w = (hi - lo) / NUM_KEYS
+        return [lo + i * w for i in range(NUM_KEYS + 1)]
 
-    def current(self):
-        """The threshold this effector should use right now."""
-        hi = self.hi if self.hi is not None else self.cal_hi
-        if len(self.recent) >= MIN_SAMPLES:
-            target = TARGET_FRAC * median(list(self.recent))
-            hi = hi + RATE * (target - hi)
-        self.hi = self._clamp(hi)
-        return self.hi
+    def zone_of(self, x):
+        e = self.edges()
+        for k in range(NUM_KEYS):
+            if x < e[k + 1]:
+                return k
+        return NUM_KEYS - 1
 
-    def tired(self):
-        s = self.session
-        return len(s) >= 20 and median(s[:10]) > 0 and median(s[-10:]) / median(s[:10]) < 0.7
+    def fit_warmup(self):
+        """Place key boundaries halfway between where they actually land on each key."""
+        if any(len(self.warmup.get(k, [])) == 0 for k in range(NUM_KEYS)):
+            return False
+        centers = [statistics.median(self.warmup[k]) for k in range(NUM_KEYS)]
+        if any(centers[k + 1] - centers[k] < MIN_ZONE_WIDTH / 2 for k in range(NUM_KEYS - 1)):
+            return False                     # aim too inconsistent; keep reach-based zones
+        inner = [(centers[k] + centers[k + 1]) / 2 for k in range(NUM_KEYS - 1)]
+        first = max(0.0, centers[0] - (inner[0] - centers[0]))
+        last = min(1.0, centers[-1] + (centers[-1] - inner[-1]))
+        self.boundaries = [first] + inner + [last]
+        self._enforce_widths()
+        return True
 
+    def fatigue(self):
+        s = self.session_peaks
+        if len(s) < 20:
+            return False
+        early = statistics.median(s[:10])
+        late = statistics.median(s[-10:])
+        return early > 0 and late / early < 0.7
+
+    # ---------- internals ----------
+    def _nudge_boundary(self, wrong_zone, right_zone, x_prev):
+        e = list(self.edges())
+        b = max(wrong_zone, right_zone)      # edge index between the two zones
+        target = x_prev + (0.01 if right_zone < wrong_zone else -0.01)
+        e[b] = e[b] + CORRECTION_RATE * (target - e[b])
+        self.boundaries = e
+        self._enforce_widths()
+
+    def _enforce_widths(self):
+        e = self.boundaries
+        for k in range(1, len(e)):
+            if e[k] - e[k - 1] < MIN_ZONE_WIDTH:
+                e[k] = e[k - 1] + MIN_ZONE_WIDTH
+        if e[-1] > 1.0:                      # pushed off the right side: squeeze back
+            over = e[-1] - 1.0
+            e[:] = [v - over for v in e]
+            for k in range(len(e) - 2, -1, -1):
+                if e[k + 1] - e[k] < MIN_ZONE_WIDTH:
+                    e[k] = e[k + 1] - MIN_ZONE_WIDTH
+
+    # ---------- save / load ----------
     def to_dict(self):
-        return {"hi": self.hi, "live_sigma": self.live_sigma, "recent": list(self.recent),
-                "taps": self.taps, "attempts": self.attempts}
+        return {"peaks": list(self.peaks), "durations": list(self.durations),
+                "landings": list(self.landings), "noise": self.noise,
+                "boundaries": self.boundaries, "taps": self.taps}
 
-    def load(self, d):
-        self.hi = d.get("hi")
-        self.live_sigma = d.get("live_sigma", 0.0)
-        self._v = self.live_sigma ** 2
-        self.recent.extend(d.get("recent", []))
-        self.taps, self.attempts = d.get("taps", 0), d.get("attempts", 0)
+    def load_dict(self, d):
+        self.peaks.extend(d.get("peaks", []))
+        self.durations.extend(d.get("durations", []))
+        self.landings.extend(d.get("landings", []))
+        self.noise = d.get("noise", 0.0)
+        self.boundaries = d.get("boundaries")
+        self.taps = d.get("taps", 0)
 
-
-class AdaptiveTapDetector(TapDetector):
-    def __init__(self, lift_hi, noise_sigma=0.0, stats=None, **kw):
-        super().__init__(lift_hi=lift_hi, **kw)
-        self.stats = stats if stats is not None else StrengthStats(floor_abs=0.03)
-        self.stats.bind(lift_hi, noise_sigma)
-        if self.stats.hi is not None:
-            self._set(self.stats.hi)
-
-    def reset(self):
-        super().reset()
-        self._exc_t = None
-        self._exc_peak = 0.0
-        self._exc_fast = False
-        self._exc_vals = []
-        self._cand_t = None
-        self._cand_vals = []
-        self._quiet_from = -1e9
-
-    def _set(self, hi):
-        self.hi, self.lo = hi, hi * LIFT_LO_FRAC
-
-    def update(self, t, lift):
-        was_down = self.state == "DOWN"
-        events = super().update(t, lift)
-        st = self.stats
-        if self.state == "DOWN" and was_down:
-            floor = st.attempt_floor(self.hi)
-            if self._exc_t is None:                            # time movements from where they start
-                if lift > 0.5 * floor:
-                    if self._cand_t is None:
-                        self._cand_t, self._cand_vals = t, []
-                    self._cand_vals.append(lift)
-                else:
-                    self._cand_t = None
-            if lift > floor:                                   # an excursion that hasn't crossed hi
-                if self._exc_t is None:
-                    t0 = self._cand_t if self._cand_t is not None else t
-                    self._exc_t, self._exc_peak, self._exc_fast = t0, lift, False
-                    self._exc_vals = list(self._cand_vals)
-                    self._cand_t = None
-                self._exc_peak = max(self._exc_peak, lift)
-            if self._exc_t is not None:
-                self._exc_vals.append(lift)
-                if self.vel < -0.5 * self.v_min:               # came back down quickly = a tap
-                    self._exc_fast = True
-                if lift < 0.5 * floor:
-                    dur = t - self._exc_t
-                    if dur < TREMOR_MAX_S:                      # a blip, not a movement: it's tremor
-                        for v in self._exc_vals:
-                            st.observe_rest(v)
-                    elif self._exc_fast and dur < ATTEMPT_MAX_S:
-                        st.add(self._exc_peak, success=False)   # they tried; it was too small
-                        self._set(st.current())
-                        self._quiet_from = t + 0.4
-                    self._exc_t = None
-            elif t >= self._quiet_from and self._cand_t is None:
-                st.observe_rest(lift)                           # resting: measure tremor
-            if self.hi < st.noise_floor():                      # shaking got worse: back off now
-                self._set(st.noise_floor())
-                st.hi = self.hi
-        else:
-            self._exc_t = None
-            self._quiet_from = t + 0.4
-        if "down" in events:
-            st.add(self.peak, success=True)
-            self._set(st.current())
-        return events
+    def summary(self):
+        th = self.thresholds()
+        lo, hi = self.reach()
+        state = "learning" if self.taps < MIN_TAPS_TO_ADAPT else "adapted"
+        s = (f"{self.name}: {state} ({self.taps} taps) | reach {lo:.2f}-{hi:.2f} | "
+             f"lift>{th['lift']:.3f} | tremor {self.noise:.3f}")
+        if self.corrections:
+            s += f" | {self.corrections} aim fixes"
+        if self.fatigue():
+            s += " | TIRED - take a break?"
+        return s
 
 
-class AdaptiveFlexDetector(FlexDetector):
-    def __init__(self, hi=0.35, lo=0.2, refractory=0.10, noise_sigma=0.0, stats=None):
-        super().__init__(hi=hi, lo=lo, refractory=refractory)
-        self.lo_frac = lo / hi if hi else 0.6
-        self.stats = stats if stats is not None else StrengthStats(floor_abs=0.08, ceil_abs=0.7)
-        self.stats.bind(hi, noise_sigma)
-        if self.stats.hi is not None:
-            self._set(self.stats.hi)
+class AdaptiveModel:
+    """One LimbModel per limb, saved together as one user file."""
 
-    def reset(self):
-        super().reset()
-        self._exc_t = None
-        self._exc_peak = 0.0
-        self._press_peak = 0.0
+    def __init__(self, user="default", path=None):
+        self.user = user
+        self.path = path or f"users/{user}.json"
+        self.limbs = {}
 
-    def _set(self, hi):
-        self.hi, self.lo = hi, hi * self.lo_frac
+    def limb(self, name):
+        if name not in self.limbs:
+            self.limbs[name] = LimbModel(name)
+        return self.limbs[name]
 
-    def update(self, t, flex):
-        was = self.pressed
-        events = super().update(t, flex)
-        st = self.stats
-        if self.pressed:
-            self._press_peak = max(self._press_peak, flex) if was else flex
-        elif "up" in events:
-            st.add(self._press_peak, success=True)
-            self._set(st.current())
-        elif not was:
-            floor = st.attempt_floor(self.hi)
-            if flex > floor:
-                if self._exc_t is None:
-                    self._exc_t, self._exc_peak = t, flex
-                self._exc_peak = max(self._exc_peak, flex)
-            elif self._exc_t is not None:
-                if flex < 0.5 * floor:
-                    if t - self._exc_t < ATTEMPT_MAX_S:
-                        st.add(self._exc_peak, success=False)
-                        self._set(st.current())
-                    self._exc_t = None
-            elif abs(flex) < self.lo:
-                st.observe_rest(flex)
-        return events
+    def observe(self, name, t, x, h):
+        self.limb(name).observe(t, x, h)
 
+    def on_tap(self, name, t, x, peak_h, duration, allow_corrections=True):
+        return self.limb(name).on_tap(t, x, peak_h, duration, allow_corrections)
 
-class ZoneState:
-    """What we've learned about one effector's zones (saved between sessions)."""
+    def zone_of(self, name, x):
+        return self.limb(name).zone_of(x)
 
-    def __init__(self):
-        self.w_ratio = 1.0          # learned width / calibrated width
-        self.nudge = {}             # boundary index -> offset in zone widths
-        self.reach = deque(maxlen=40)
-        self.fixes = 0
+    def thresholds(self, name):
+        return self.limb(name).thresholds()
 
-    def to_dict(self):
-        return {"w_ratio": self.w_ratio, "nudge": {str(k): v for k, v in self.nudge.items()},
-                "fixes": self.fixes}
-
-    def load(self, d):
-        self.w_ratio = d.get("w_ratio", 1.0)
-        self.nudge = {int(k): v for k, v in d.get("nudge", {}).items()}
-        self.fixes = d.get("fixes", 0)
-
-
-class AdaptiveZoneMap(ZoneMap):
-    """ZoneMap whose zone width and boundaries adapt. Same zone_for / zone_center / left / width API."""
-
-    def __init__(self, center, n, width, rest_x=None, home=None, state=None):
-        super().__init__(center, n, width)
-        self.fit_w = width
-        self.rest_x = center if rest_x is None else rest_x
-        self.home = n // 2 if home is None else home
-        # rig may have shifted the lane to keep it on screen; remember that shift
-        self.shift = (center - n * width / 2.0) - (self.rest_x - (self.home + 0.5) * width)
-        self.state = state if state is not None else ZoneState()
-        self.state.w_ratio = max(MAX_SHRINK, min(1.0, self.state.w_ratio))
-        self._last = None
-        self._rebuild()
-
-    def _rebuild(self):
-        w = max(MIN_W, self.fit_w * self.state.w_ratio)
-        if self.fit_w < MIN_W:
-            w = self.fit_w
-        left = self.rest_x - (self.home + 0.5) * w + self.shift * (w / self.fit_w)
-        e = [left + k * w for k in range(self.n + 1)]
-        for k, d in self.state.nudge.items():
-            if 0 < k < self.n:
-                e[k] += max(-MAX_NUDGE, min(MAX_NUDGE, d)) * w
-        for k in range(1, self.n + 1):                 # keep every zone at least half-width
-            e[k] = max(e[k], e[k - 1] + 0.5 * w)
-        self.edges, self.width = e, w
-        self.center = (e[0] + e[-1]) / 2.0
-
-    @property
-    def left(self):
-        return self.edges[0]
-
-    def zone_center(self, i):
-        return (self.edges[i] + self.edges[i + 1]) / 2.0
-
-    def bounds(self, i):
-        return self.edges[i], self.edges[i + 1]
-
-    def zone_for(self, x, prev=None, margin=0.25):
-        z = max(0, min(self.n - 1, bisect_right(self.edges, x) - 1))
-        if prev is not None and prev != z and 0 <= prev < self.n:
-            if abs(x - self.zone_center(prev)) - abs(x - self.zone_center(z)) < margin * self.width:
-                z = prev
-        return z
-
-    def observe_tap(self, t, x, z):
-        st = self.state
-        # AIM: landed near a boundary, then quickly re-tapped the neighbour -> move that boundary
-        if self._last is not None:
-            t0, x0, z0 = self._last
-            if t - t0 < CORRECT_GAP_S and abs(z - z0) == 1:
-                k = max(z, z0)
-                if abs(x0 - self.edges[k]) < NEAR_EDGE * self.width:
-                    base = self.edges[k] - st.nudge.get(k, 0.0) * self.width
-                    want = x0 - 0.1 * self.width if z > z0 else x0 + 0.1 * self.width
-                    d = st.nudge.get(k, 0.0)
-                    st.nudge[k] = max(-MAX_NUDGE, min(MAX_NUDGE, d + 0.4 * ((want - base) / self.width - d)))
-                    st.fixes += 1
-        self._last = (t, x, z)
-        # REACH: if they never get out to the outer zones, shrink zones so they can
-        st.reach.append(x - self.rest_x)
-        if len(st.reach) >= 12:
-            r = sorted(st.reach)
-            lo_r = -r[max(0, int(0.05 * (len(r) - 1)))]
-            hi_r = r[int(0.95 * (len(r) - 1))]
-            fits = []
-            if self.home > 0:
-                fits.append(1.15 * max(lo_r, 0.0) / self.home)
-            if self.n - 1 - self.home > 0:
-                fits.append(1.15 * max(hi_r, 0.0) / (self.n - 1 - self.home))
-            if fits:
-                target = max(MAX_SHRINK, min(1.0, min(fits) / self.fit_w))
-                st.w_ratio += 0.2 * (target - st.w_ratio)
-        self._rebuild()
-
-
-def zone_bounds(zones, i):
-    """(left, right) of zone i for any ZoneMap, adaptive or not."""
-    if hasattr(zones, "bounds"):
-        return zones.bounds(i)
-    return zones.left + i * zones.width, zones.left + (i + 1) * zones.width
-
-
-class Learner:
-    """Owns everything learned about one player and saves it to users/<user>.json."""
-
-    def __init__(self, user="default", folder=None):
-        safe = "".join(c for c in str(user) if c.isalnum() or c in "-_") or "default"
-        self.user = safe
-        self.path = os.path.join(folder or USERS_DIR, safe + ".json")
-        self._strength, self._zones = {}, {}
-        self._taps = 0
-        self._warned = set()
-        self.load()
-
-    def strength(self, key):
-        if key not in self._strength:
-            hand = "/" in key
-            self._strength[key] = (StrengthStats(floor_abs=0.08, ceil_abs=0.7) if hand
-                                   else StrengthStats(floor_abs=0.03))
-            saved = self._saved.get("strength", {}).get(key)
-            if saved:
-                self._strength[key].load(saved)
-        return self._strength[key]
-
-    def zones(self, eid):
-        if eid not in self._zones:
-            self._zones[eid] = ZoneState()
-            saved = self._saved.get("zones", {}).get(eid)
-            if saved:
-                self._zones[eid].load(saved)
-        return self._zones[eid]
-
-    def on_events(self, t, events, warnings):
-        downs = sum(1 for e in events if e[2] == "down")
-        if not downs:
-            return
-        self._taps += downs
-        for key, st in self._strength.items():
-            if st.tired() and key not in self._warned:
-                self._warned.add(key)
-                warnings.append("%s: movements are getting weaker - maybe take a short break" % key)
-        if self._taps % AUTOSAVE_EVERY < downs:
-            self.save()
-
-    def status(self):
-        lines = []
-        for key, st in sorted(self._strength.items()):
-            if st.hi is None:
-                continue
-            state = "learning" if len(st.recent) < MIN_SAMPLES else "adapted"
-            line = "%s: %s, threshold %.2f (calibrated %.2f)" % (key, state, st.hi, st.cal_hi or 0)
-            z = self._zones.get(key)
-            if z is not None and (z.w_ratio < 0.99 or z.fixes):
-                line += ", zones %d%%" % round(100 * z.w_ratio)
-                if z.fixes:
-                    line += ", %d aim fixes" % z.fixes
-            lines.append(line)
-        return lines
+    def reset(self, name=None):
+        for n in ([name] if name else list(self.limbs)):
+            self.limbs[n] = LimbModel(n)
 
     def save(self):
-        data = {"user": self.user,
-                "strength": {k: v.to_dict() for k, v in self._strength.items()},
-                "zones": {k: v.to_dict() for k, v in self._zones.items()}}
-        try:
-            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-            tmp = self.path + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(data, f, indent=1)
-            os.replace(tmp, self.path)
-        except OSError as e:
-            print("[adapt] could not save:", e)
+        import os
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        with open(self.path, "w") as f:
+            json.dump({"user": self.user,
+                       "limbs": {n: m.to_dict() for n, m in self.limbs.items()}}, f, indent=1)
 
     def load(self):
-        self._saved = {}
         try:
             with open(self.path) as f:
-                self._saved = json.load(f)
+                data = json.load(f)
         except (OSError, ValueError):
-            pass
+            return False
+        for n, d in data.get("limbs", {}).items():
+            self.limb(n).load_dict(d)
+        return True
 
-    def forget(self):
-        self._strength, self._zones, self._saved = {}, {}, {}
-        try:
-            os.remove(self.path)
-        except OSError:
-            pass
+
+class Warmup:
+    """
+    30-second aiming game. Lights up a target key, player taps it, we record where they
+    landed. Two rounds through all 8 keys in a shuffled order, then fit the boundaries.
+    """
+
+    def __init__(self, model, limb, rounds=2, seed=7):
+        import random
+        rng = random.Random(seed)
+        self.model, self.limb = model, limb
+        self.order = []
+        for _ in range(rounds):
+            r = list(range(NUM_KEYS))
+            rng.shuffle(r)
+            self.order += r
+        self.i = 0
+
+    def target(self):
+        return self.order[self.i] if self.i < len(self.order) else None
+
+    def hit(self, x):
+        t = self.target()
+        if t is None:
+            return None
+        self.model.limb(self.limb).on_warmup_hit(t, x)
+        self.i += 1
+        if self.i == len(self.order):
+            return self.model.limb(self.limb).fit_warmup()
+        return None
+
+    def done(self):
+        return self.i >= len(self.order)
+
+    def progress(self):
+        return self.i, len(self.order)
